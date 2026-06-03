@@ -547,9 +547,9 @@ async function loadAllData() {
     let cachedOrderFees={};
     try{ cachedOrderFees=JSON.parse(localStorage.getItem('amazon_order_fees_v7')||'{}'); }catch(e){}
 
-    const ordersNeedingFees=allValidOrders.filter(o=>cachedOrderFees[o.AmazonOrderId]===undefined);
+    const ordersNeedingFees=validOrders.filter(o=>cachedOrderFees[o.AmazonOrderId]===undefined);
     const totalFeeOrders=ordersNeedingFees.length;
-    setLoadingText(`Cargando comisiones reales...`,`${allValidOrders.length-totalFeeOrders} en caché · ${totalFeeOrders} nuevos`);
+    setLoadingText(`Cargando comisiones reales...`,`${validOrders.length-totalFeeOrders} en caché · ${totalFeeOrders} nuevos`);
 
     const feeBatch=5;
     for(let i=0;i<totalFeeOrders;i+=feeBatch){
@@ -1204,5 +1204,6 @@ setTimeout(() => {
 </script>
 </body>
 </html>
+
 
 
