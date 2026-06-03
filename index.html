@@ -288,7 +288,7 @@
       </div>
       <div class="table-scroll">
         <table>
-          <thead><tr><th>FECHA</th><th>PEDIDO</th><th>PRODUCTO</th><th>CANAL</th><th>UNID.</th><th>TOTAL c/IVA</th><th>IVA</th><th>BASE IMPONIBLE</th><th>COMISIÓN AMZ</th><th>COSTE PROD.</th><th>RENTAB. REAL</th><th>ESTADO</th></tr></thead>
+          <thead><tr><th>FECHA</th><th>PEDIDO</th><th>PRODUCTO</th><th>CANAL</th><th>UNID.</th><th>TOTAL c/IVA</th><th>IVA</th><th>BASE IMPONIBLE</th><th>COMISIÓN AMZ</th><th>COSTE PROD.</th><th>COSTE ENVÍO</th><th>RENTAB. REAL</th><th>ESTADO</th></tr></thead>
           <tbody id="ventasBody"><tr><td colspan="12" style="text-align:center;color:var(--text-muted);padding:24px">Cargando...</td></tr></tbody>
         </table>
       </div>
@@ -385,6 +385,7 @@ const STATE = {
   dateTo: new Date().toISOString().slice(0,10),
   orders: [],
   orderItemsMap: {},
+  orderFeesMap: {},
   asinMap: {},
   finEvents: {},
   refundEvents: [],
@@ -474,6 +475,7 @@ async function proxyCall(action, extraParams={}) {
 // ============================================================
 function clearCacheAndReload() {
   try{ localStorage.removeItem('amazon_items_cache_v7'); }catch(e){}
+  try{ localStorage.removeItem('amazon_order_fees_v7'); }catch(e){}
   showToast('Caché borrado — recargando todo...');
   setTimeout(()=>loadAllData(), 500);
 }
@@ -533,11 +535,50 @@ async function loadAllData() {
     STATE.orderItemsMap=orderItemsMap;
     setProgress(75);
 
-    // 3. Eventos financieros
+    // 3. Eventos financieros globales
     setLoadingText('Cargando datos financieros...','Fees, reembolsos y liquidaciones');
     const finData=await proxyCall('finances');
     STATE.finEvents=finData.payload?.FinancialEvents||{};
     STATE.refundEvents=STATE.finEvents.RefundEventList||[];
+    setProgress(80);
+
+    // 4. Fees reales por pedido con caché
+    setLoadingText('Cargando comisiones reales...','Fees exactos por pedido desde Amazon');
+    let cachedOrderFees={};
+    try{ cachedOrderFees=JSON.parse(localStorage.getItem('amazon_order_fees_v7')||'{}'); }catch(e){}
+
+    const ordersNeedingFees=allValidOrders.filter(o=>cachedOrderFees[o.AmazonOrderId]===undefined);
+    const totalFeeOrders=ordersNeedingFees.length;
+    setLoadingText(`Cargando comisiones reales...`,`${allValidOrders.length-totalFeeOrders} en caché · ${totalFeeOrders} nuevos`);
+
+    const feeBatch=5;
+    for(let i=0;i<totalFeeOrders;i+=feeBatch){
+      const batch=ordersNeedingFees.slice(i,i+feeBatch);
+      const results=await Promise.all(batch.map(o=>
+        proxyCall('orderFinances',{orderId:o.AmazonOrderId})
+          .then(d=>{
+            const events=d.payload?.FinancialEvents||{};
+            let totalFee=0;
+            let hasData=false;
+            (events.ShipmentEventList||[]).forEach(ev=>{
+              (ev.ShipmentItemList||[]).forEach(item=>{
+                (item.ItemFeeList||[]).forEach(fee=>{
+                  totalFee+=Math.abs(parseFloat(fee.FeeAmount?.Amount||0));
+                  hasData=true;
+                });
+              });
+            });
+            return {orderId:o.AmazonOrderId, fee:hasData?totalFee:null};
+          })
+          .catch(()=>({orderId:o.AmazonOrderId, fee:null}))
+      ));
+      results.forEach(({orderId,fee})=>{ cachedOrderFees[orderId]=fee; });
+      setProgress(80+Math.round((i/Math.max(totalFeeOrders,1))*15));
+      await new Promise(r=>setTimeout(r,150));
+    }
+
+    try{ localStorage.setItem('amazon_order_fees_v7',JSON.stringify(cachedOrderFees)); }catch(e){}
+    STATE.orderFeesMap=cachedOrderFees;
     setProgress(95);
 
     // 4. Render
@@ -772,7 +813,10 @@ function renderVentas(costs) {
     const base=importe-iva;
     const canal=o.FulfillmentChannel==='AFN'?'FBA':'FBM';
     const units=o.NumberOfItemsShipped||0;
-    const commission=orderFeeMap[o.AmazonOrderId]||(importe*0.15);
+    const realFee=STATE.orderFeesMap[o.AmazonOrderId];
+    const feeRate=canal==='FBA'?0.20:0.15;
+    const commission=realFee!==null&&realFee!==undefined?realFee:(importe*feeRate);
+    const isEstFee=realFee===null||realFee===undefined;
     const hasRefund=refundMap[o.AmazonOrderId]>0;
     const isCanceled=o.OrderStatus==='Canceled';
 
@@ -789,7 +833,8 @@ function renderVentas(costs) {
     });
     costePedido+=maxShipping; // solo el envío más alto
 
-    const rentabilidad=importe-commission-costePedido;
+    const baseImponible=importe/1.21;
+    const rentabilidad=baseImponible-commission-costePedido-maxShipping;
     const rentColor=rentabilidad>0?'val-green':rentabilidad<0?'val-red':'val-yellow';
 
     const estadoMap={Shipped:'Enviado',Pending:'Pendiente',Canceled:'Cancelado',Unshipped:'Sin enviar',Delivered:'Entregado',PartiallyShipped:'Parcial'};
@@ -811,8 +856,9 @@ function renderVentas(costs) {
         <td><strong>${isCanceled?'<span class="val-red">Cancelado</span>':'€'+importe.toFixed(2)}</strong></td>
         <td style="color:var(--text-muted)">€${iva.toFixed(2)}</td>
         <td>€${base.toFixed(2)}</td>
-        <td class="val-red">€${commission.toFixed(2)}</td>
+        <td class="val-red">€${commission.toFixed(2)}${isEstFee?'<span title="Fee estimado — datos financieros pendientes" style="color:var(--yellow);font-size:10px;margin-left:3px">est.</span>':''}</td>
         <td style="color:var(--text-muted)">€${costePedido.toFixed(2)}</td>
+        <td style="color:var(--text-muted)">€${maxShipping.toFixed(2)}</td>
         <td class="${rentColor}"><strong>€${rentabilidad.toFixed(2)}</strong></td>
         <td><span class="${estadoColor}">${estadoES}</span></td>
       </tr>`;
@@ -1019,7 +1065,7 @@ function exportExcel() {
   const costs=getCosts();
 
   // Pedidos
-  const oData=[['Fecha','Pedido','Estado','Total c/IVA','IVA','Base Imponible','Canal','Unidades','Comisión AMZ est.','Coste Prod.','Rentab. Real']];
+  const oData=[['Fecha','Pedido','Estado','Total c/IVA','IVA','Base Imponible','Canal','Unidades','Comisión AMZ est.','Coste Prod.','Coste Envío','Rentab. Real']];
   STATE.orders.forEach(o=>{
     const imp=parseFloat(o.OrderTotal?.Amount||0);
     const iva=imp-(imp/(1+IVA_RATE));
@@ -1027,7 +1073,14 @@ function exportExcel() {
     const commission=imp*0.15;
     let coste=0;
     (STATE.orderItemsMap[o.AmazonOrderId]||[]).forEach(item=>{coste+=(costs[item.ASIN]?.cost||0)*(item.QuantityOrdered||0);});
-    oData.push([new Date(o.PurchaseDate).toLocaleDateString('es-ES'),o.AmazonOrderId,o.OrderStatus,imp.toFixed(2),iva.toFixed(2),base.toFixed(2),o.FulfillmentChannel==='AFN'?'FBA':'FBM',o.NumberOfItemsShipped||0,commission.toFixed(2),coste.toFixed(2),(imp-commission-coste).toFixed(2)]);
+    let maxShipExcel=0;
+    (STATE.orderItemsMap[o.AmazonOrderId]||[]).forEach(item=>{
+      const canalEx=o.FulfillmentChannel==='AFN'?'FBA':'FBM';
+      const cEx=costs[item.ASIN+'_'+canalEx]||costs[item.ASIN]||{};
+      if((cEx.shipping||0)>maxShipExcel)maxShipExcel=cEx.shipping||0;
+    });
+    const baseEx=imp/1.21;
+    oData.push([new Date(o.PurchaseDate).toLocaleDateString('es-ES'),o.AmazonOrderId,o.OrderStatus,imp.toFixed(2),(imp-baseEx).toFixed(2),baseEx.toFixed(2),o.FulfillmentChannel==='AFN'?'FBA':'FBM',o.NumberOfItemsShipped||0,commission.toFixed(2),coste.toFixed(2),maxShipExcel.toFixed(2),(baseEx-commission-coste-maxShipExcel).toFixed(2)]);
   });
   const wsO=XLSX.utils.aoa_to_sheet(oData);
   wsO['!cols']=[{wch:12},{wch:22},{wch:14},{wch:12},{wch:10},{wch:14},{wch:6},{wch:8},{wch:14},{wch:12},{wch:12}];
@@ -1151,4 +1204,5 @@ setTimeout(() => {
 </script>
 </body>
 </html>
+
 
