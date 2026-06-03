@@ -452,16 +452,18 @@ function saveAllCosts() {
 async function proxyCall(action, extraParams={}) {
   const url=new URL(PROXY);
   url.searchParams.set('action',action);
-  url.searchParams.set('dateFrom', STATE.dateFrom+'T00:00:00Z');
-  // dateTo: si es hoy, restar 10 minutos para evitar error de Amazon; si es pasado, usar fin del día
-  const todayStr=new Date().toISOString().slice(0,10);
-  let dateToISO;
-  if(STATE.dateTo>=todayStr){
-    dateToISO=new Date(Date.now()-10*60*1000).toISOString();
-  } else {
-    dateToISO=STATE.dateTo+'T23:59:59Z';
+  // Solo añadir fechas si NO es una llamada con nextToken (paginación)
+  if(!extraParams.nextToken) {
+    url.searchParams.set('dateFrom', STATE.dateFrom+'T00:00:00Z');
+    const todayStr=new Date().toISOString().slice(0,10);
+    let dateToISO;
+    if(STATE.dateTo>=todayStr){
+      dateToISO=new Date(Date.now()-10*60*1000).toISOString();
+    } else {
+      dateToISO=STATE.dateTo+'T23:59:59Z';
+    }
+    url.searchParams.set('dateTo', dateToISO);
   }
-  url.searchParams.set('dateTo', dateToISO);
   Object.entries(extraParams).forEach(([k,v])=>url.searchParams.set(k,v));
   const res=await fetch(url.toString());
   if(!res.ok) throw new Error(`Proxy ${res.status}`);
