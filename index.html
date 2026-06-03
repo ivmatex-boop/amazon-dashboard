@@ -659,6 +659,7 @@ function renderCostes(costs) {
         <td><div class="margin-bar"><span class="${colorE}" id="mp-${safeid}">${margenConEnvio.toFixed(1)}%</span><div class="margin-track"><div class="margin-fill" id="mb-${safeid}" style="width:${Math.min(Math.max(margenConEnvio,0),100)}%;background:${barColorE}"></div></div></div></td>
       </tr>`;
   });
+  addSortToTable('costesTable');
 }
 
 function previewMargen(input,key){
@@ -773,6 +774,7 @@ function renderRentabilidad(costs) {
   document.getElementById('kpi-peor-prod').textContent=worstName;
   document.getElementById('kpi-peor-asin').textContent=worstAsin;
   document.getElementById('kpi-peor-val').textContent=worstM<999?worstM.toFixed(1)+'%':'—';
+  addSortToTable('rentabilidadTable');
 }
 
 // ============================================================
@@ -831,12 +833,14 @@ function renderVentas(costs) {
     const items=STATE.orderItemsMap[o.AmazonOrderId]||[];
     items.forEach(item=>{
       const itemKey=item.ASIN+'_'+canal;
-      const c=costs[itemKey]||costs[item.ASIN]||{};
+      // Buscar coste: primero por ASIN_CANAL, luego por ASIN_FBM, luego ASIN_FBA
+      const c=costs[itemKey]||costs[item.ASIN+'_FBM']||costs[item.ASIN+'_FBA']||{};
       costePedido+=(c.cost||0)*(item.QuantityOrdered||0);
       const itemShipping=(c.shipping||0);
       if(itemShipping>maxShipping)maxShipping=itemShipping;
     });
-    costePedido+=maxShipping; // solo el envío más alto
+    // El envío ya está en maxShipping, NO sumarlo a costePedido aquí
+    // se añade como columna separada
 
     const baseImponible=importe/1.21;
     const rentabilidad=baseImponible-commission-costePedido-maxShipping;
@@ -868,6 +872,7 @@ function renderVentas(costs) {
         <td><span class="${estadoColor}">${estadoES}</span></td>
       </tr>`;
   });
+  addSortToTable('ventasTable');
 }
 
 // ============================================================
@@ -1023,6 +1028,7 @@ function renderDevoluciones() {
   document.getElementById('kpi-dev-importe').textContent='€'+totalImporte.toFixed(0);
   document.getElementById('kpi-dev-pendiente').textContent=totalPendiente;
   document.getElementById('kpi-dev-tasa').textContent=tasa+'%';
+  addSortToTable('devolucionesTable');
 }
 
 // ============================================================
@@ -1202,10 +1208,7 @@ function addSortToTable(tableId) {
 
 // INIT
 loadAllData();
-// Añadir ordenación a todas las tablas tras carga inicial
-setTimeout(() => {
-  ['rentabilidadTable','ventasTable','controllingTable','devolucionesTable','costesTable'].forEach(addSortToTable);
-}, 2000);
+// La ordenación se añade al final de cada función render
 </script>
 </body>
 </html>
