@@ -506,7 +506,7 @@ async function loadAllData() {
     const validOrders=allOrders.filter(o=>o.OrderStatus!=='Canceled');
     const asinMap={};
     const orderItemsMap={};
-    const maxOrders=Math.min(validOrders.length,200);
+    const maxOrders=validOrders.length;
     const batchSize=10;
     for(let i=0;i<maxOrders;i+=batchSize){
       const batch=validOrders.slice(i,i+batchSize);
@@ -527,7 +527,7 @@ async function loadAllData() {
           asinMap[key].revenue+=parseFloat(item.ItemPrice?.Amount||0);
         });
       });
-      setProgress(55+Math.round((i/maxOrders)*20));
+      setProgress(55+Math.round((i/Math.max(maxOrders,1))*15));
       setLoadingText(`Analizando productos...`,`${Math.min(i+batchSize,maxOrders)} de ${maxOrders} pedidos`);
       await new Promise(r=>setTimeout(r,200));
     }
@@ -1204,6 +1204,3 @@ setTimeout(() => {
 </script>
 </body>
 </html>
-
-
-
