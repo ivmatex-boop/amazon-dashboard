@@ -499,7 +499,8 @@ async function loadAllData() {
       page++;
       setProgress(Math.min(5+page*8,50));
       setLoadingText(`Cargando pedidos...`,`${allOrders.length} pedidos cargados...`);
-    } while(nextToken && page<20);
+      if(nextToken) await new Promise(r=>setTimeout(r,500));
+    } while(nextToken && page<50);
     STATE.orders=allOrders;
     setProgress(55);
 
