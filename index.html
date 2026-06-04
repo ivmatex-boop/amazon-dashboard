@@ -487,22 +487,14 @@ async function loadAllData() {
   setProgress(5);
 
   try {
-    // 1. Pedidos con paginación completa
-    setLoadingText('Cargando pedidos...','Desde '+STATE.dateFrom+' hasta '+STATE.dateTo);
-    let allOrders=[], nextToken=null, page=0;
-    do {
-      const params = nextToken ? {nextToken} : {};
-      const data = await proxyCall('orders', params);
-      const batch = data.payload?.Orders||[];
-      allOrders = allOrders.concat(batch);
-      nextToken = data.payload?.NextToken||null;
-      page++;
-      setProgress(Math.min(5+page*8,50));
-      setLoadingText(`Cargando pedidos...`,`${allOrders.length} pedidos cargados...`);
-      if(nextToken) await new Promise(r=>setTimeout(r,500));
-    } while(nextToken && page<50);
-    STATE.orders=allOrders;
+    // 1. Pedidos — el Worker pagina internamente y devuelve TODOS de una vez
+    setLoadingText('Cargando pedidos...','Desde '+STATE.dateFrom+' — el Worker está paginando, puede tardar unos segundos...');
+    const ordersData = await proxyCall('orders');
+    const allOrders = ordersData.payload?.Orders || [];
+    const totalPages = ordersData.payload?.totalPages || 1;
+    STATE.orders = allOrders;
     setProgress(55);
+    setLoadingText(`Pedidos cargados`,`${allOrders.length} pedidos en ${totalPages} página(s)`);
 
     // 2. Items de pedidos (todos los válidos hasta 100)
     setLoadingText('Analizando productos vendidos...','Obteniendo ASINs y cantidades');
