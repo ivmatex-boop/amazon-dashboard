@@ -533,6 +533,8 @@ async function loadAllData() {
     const missingItems=validOrders.filter(o=>!STATE.orderItemsMap[o.AmazonOrderId]||STATE.orderItemsMap[o.AmazonOrderId].length===0);
     if(missingItems.length>0){
       setLoadingText(`Completando items faltantes...`,`${missingItems.length} pedidos sin items`);
+      let extraCache={};
+      try{ extraCache=JSON.parse(localStorage.getItem('amazon_items_cache_v7')||'{}'); }catch(e){}
       for(let i=0;i<missingItems.length;i+=batchSize){
         const batch=missingItems.slice(i,i+batchSize);
         const results=await Promise.all(batch.map(o=>
@@ -541,7 +543,7 @@ async function loadAllData() {
             .catch(()=>({orderId:o.AmazonOrderId,items:[]}))
         ));
         results.forEach(({orderId,items})=>{
-          cachedItems[orderId]=items;
+          extraCache[orderId]=items;
           STATE.orderItemsMap[orderId]=items;
           const order=STATE.orders.find(o=>o.AmazonOrderId===orderId);
           const canal=order?.FulfillmentChannel==='AFN'?'FBA':'FBM';
@@ -555,7 +557,7 @@ async function loadAllData() {
         });
         await new Promise(r=>setTimeout(r,150));
       }
-      try{ localStorage.setItem('amazon_items_cache_v7',JSON.stringify(cachedItems)); }catch(e){}
+      try{ localStorage.setItem('amazon_items_cache_v7',JSON.stringify(extraCache)); }catch(e){}
     }
     setProgress(75);
 
@@ -1257,4 +1259,3 @@ loadAllData();
 </script>
 </body>
 </html>
-
