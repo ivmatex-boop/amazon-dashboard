@@ -31,7 +31,10 @@ async function supabase(method, table, data = null, query = '') {
     const err = await res.text();
     throw new Error(`Supabase ${method} ${table}: ${res.status} ${err}`);
   }
-  return res.status === 204 ? null : res.json();
+  if (res.status === 204 || res.headers.get('content-length') === '0') return null;
+  const text = await res.text();
+  if (!text || text.trim() === '') return null;
+  return JSON.parse(text);
 }
 
 // ============================================================
@@ -75,7 +78,9 @@ async function main() {
   // 1. Obtener última sincronización
   const syncLogs = await supabase('GET', 'sync_log', null, '?marketplace=eq.ES&order=last_sync.desc&limit=1');
   const lastSync = syncLogs?.[0];
-  const lastOrderDate = lastSync?.last_order_date || '2026-01-01T00:00:00Z';
+  const rawDate = lastSync?.last_order_date || '2026-01-01T00:00:00Z';
+  // Normalizar a formato Z (Amazon requiere ISO8601 con Z, no +00:00)
+  const lastOrderDate = new Date(rawDate).toISOString();
   console.log(`Última sincronización: ${lastSync?.last_sync}`);
   console.log(`Cargando pedidos desde: ${lastOrderDate}`);
 
@@ -215,14 +220,14 @@ async function main() {
 
   // 7. Actualizar log de sincronización
   const maxDate = allOrders.reduce((max, o) => o.PurchaseDate > max ? o.PurchaseDate : max, lastOrderDate);
-  await supabase('POST', 'sync_log', {
+  await supabase('POST', 'sync_log', [{
     marketplace: 'ES',
     last_sync: new Date().toISOString(),
     last_order_date: maxDate,
     orders_synced: allOrders.length,
     status: 'ok',
     notes: `${allOrders.length} pedidos · ${itemsProcessed} con items · ${feesProcessed} con fees`
-  });
+  }]).catch(e => console.log('sync_log warning:', e.message));
 
   console.log('');
   console.log('✅ Sincronización completada');
