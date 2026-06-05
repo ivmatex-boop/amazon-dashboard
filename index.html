@@ -454,10 +454,9 @@ function saveAllCosts() {
 async function proxyCall(action, extraParams={}) {
   const url=new URL(PROXY);
   url.searchParams.set('action',action);
-  // Solo añadir fechas si NO es una llamada con nextToken (paginación)
-  if(!extraParams.nextToken) {
+  // Añadir fechas para llamadas que las necesiten
+  if(!extraParams.orderIds && !extraParams.orderId) {
     url.searchParams.set('dateFrom', STATE.dateFrom+'T00:00:00Z');
-    // dateTo siempre 15 minutos antes del momento actual para evitar errores de Amazon
     const dateToISO = new Date(Date.now()-15*60*1000).toISOString();
     url.searchParams.set('dateTo', dateToISO);
   }
@@ -475,155 +474,103 @@ async function proxyCall(action, extraParams={}) {
 function clearCacheAndReload() {
   try{ localStorage.removeItem('amazon_items_cache_v7'); }catch(e){}
   try{ localStorage.removeItem('amazon_order_fees_v7'); }catch(e){}
+  try{ localStorage.removeItem('amazon_orders_cache_v7'); }catch(e){}
   showToast('Caché borrado — recargando todo...');
   setTimeout(()=>loadAllData(), 500);
 }
 
 async function loadAllData() {
-  showLoading(true,'Conectando con Amazon SP-API...','Cargando todos los pedidos desde '+STATE.dateFrom);
+  showLoading(true,'Conectando con Amazon SP-API...','Cargando pedidos e items — puede tardar 1-2 minutos la primera vez');
   setProgress(5);
 
   try {
-    // 1. Pedidos — el Worker pagina internamente y devuelve TODOS de una vez
-    setLoadingText('Cargando pedidos...','Desde '+STATE.dateFrom+' — el Worker está paginando, puede tardar unos segundos...');
-    const ordersData = await proxyCall('orders');
-    const allOrders = ordersData.payload?.Orders || [];
-    const totalPages = ordersData.payload?.totalPages || 1;
+    // UNA SOLA LLAMADA — el Worker devuelve pedidos + items de todos
+    setLoadingText('Cargando todos los pedidos e items...','El Worker está procesando todo en Amazon');
+    const result = await proxyCall('orders_with_items');
+    const allOrders = result.payload?.Orders || [];
+    const itemsMap = result.payload?.ItemsMap || {};
+
     STATE.orders = allOrders;
-    setProgress(55);
-    setLoadingText(`Pedidos cargados`,`${allOrders.length} pedidos en ${totalPages} página(s)`);
+    STATE.orderItemsMap = itemsMap;
 
-    // 2. Items de pedidos (todos los válidos hasta 100)
-    setLoadingText('Analizando productos vendidos...','Obteniendo ASINs y cantidades');
-    const validOrders=allOrders.filter(o=>o.OrderStatus!=='Canceled');
-    const asinMap={};
-    const orderItemsMap={};
-    const maxOrders=validOrders.length;
-    const batchSize=10;
-    for(let i=0;i<maxOrders;i+=batchSize){
-      const batch=validOrders.slice(i,i+batchSize);
-      const results=await Promise.all(batch.map(o=>
-        proxyCall('orderItems',{orderId:o.AmazonOrderId})
-          .then(d=>({orderId:o.AmazonOrderId,items:d.payload?.OrderItems||[]}))
-          .catch(()=>({orderId:o.AmazonOrderId,items:[]}))
-      ));
-      results.forEach(({orderId,items})=>{
-        orderItemsMap[orderId]=items;
-        const order=STATE.orders.find(o=>o.AmazonOrderId===orderId);
-        const canal=order?.FulfillmentChannel==='AFN'?'FBA':'FBM';
-        items.forEach(item=>{
-          const asin=item.ASIN;
-          const key=asin+'_'+canal;
-          if(!asinMap[key])asinMap[key]={asin,key,canal,name:item.Title,units:0,revenue:0};
-          asinMap[key].units+=item.QuantityOrdered||0;
-          asinMap[key].revenue+=parseFloat(item.ItemPrice?.Amount||0);
-        });
+    // Guardar en caché
+    try {
+      localStorage.setItem('amazon_items_cache_v7', JSON.stringify(itemsMap));
+      localStorage.setItem('amazon_orders_cache_v7', JSON.stringify({
+        dateFrom: STATE.dateFrom,
+        dateTo: STATE.dateTo,
+        orders: allOrders,
+        ts: Date.now()
+      }));
+    } catch(e) {}
+
+    setProgress(60);
+    setLoadingText(`${allOrders.length} pedidos · ${Object.keys(itemsMap).length} con items`,'Construyendo mapa de productos...');
+
+    // Construir asinMap desde itemsMap
+    const asinMap = {};
+    allOrders.filter(o => o.OrderStatus !== 'Canceled').forEach(order => {
+      const items = itemsMap[order.AmazonOrderId] || [];
+      const canal = order.FulfillmentChannel === 'AFN' ? 'FBA' : 'FBM';
+      items.forEach(item => {
+        const key = item.ASIN + '_' + canal;
+        if (!asinMap[key]) asinMap[key] = { asin: item.ASIN, key, canal, name: item.Title, units: 0, revenue: 0 };
+        asinMap[key].units += item.QuantityOrdered || 0;
+        asinMap[key].revenue += parseFloat(item.ItemPrice?.Amount || 0);
       });
-      setProgress(55+Math.round((i/Math.max(maxOrders,1))*15));
-      setLoadingText(`Analizando productos...`,`${Math.min(i+batchSize,maxOrders)} de ${maxOrders} pedidos`);
-      await new Promise(r=>setTimeout(r,200));
-    }
-    STATE.asinMap=asinMap;
-    STATE.orderItemsMap=orderItemsMap;
-    // Identificar pedidos sin items y cargarlos en background
-    const missingItems=validOrders.filter(o=>!STATE.orderItemsMap[o.AmazonOrderId]||STATE.orderItemsMap[o.AmazonOrderId].length===0);
-    if(missingItems.length===0){
-      // Todos los items ya están en caché — renderizar directamente
-      renderAll();
-      setProgress(100);
-    }
-    if(missingItems.length>0){
-      setLoadingText(`Completando items faltantes...`,`${missingItems.length} pedidos sin items`);
-      let extraCache={};
-      try{ extraCache=JSON.parse(localStorage.getItem('amazon_items_cache_v7')||'{}'); }catch(e){}
-      for(let i=0;i<missingItems.length;i+=5){
-        const batch=missingItems.slice(i,i+batchSize);
-        const results=await Promise.all(batch.map(o=>
-          proxyCall('orderItems',{orderId:o.AmazonOrderId})
-            .then(d=>({orderId:o.AmazonOrderId,items:d.payload?.OrderItems||[]}))
-            .catch(()=>({orderId:o.AmazonOrderId,items:[]}))
-        ));
-        results.forEach(({orderId,items})=>{
-          extraCache[orderId]=items;
-          STATE.orderItemsMap[orderId]=items;
-          const order=STATE.orders.find(o=>o.AmazonOrderId===orderId);
-          const canal=order?.FulfillmentChannel==='AFN'?'FBA':'FBM';
-          items.forEach(item=>{
-            const asin=item.ASIN;
-            const key=asin+'_'+canal;
-            if(!STATE.asinMap[key])STATE.asinMap[key]={asin,key,canal,name:item.Title,units:0,revenue:0};
-            STATE.asinMap[key].units+=item.QuantityOrdered||0;
-            STATE.asinMap[key].revenue+=parseFloat(item.ItemPrice?.Amount||0);
-          });
-        });
-        await new Promise(r=>setTimeout(r,150));
-      }
-      try{ localStorage.setItem('amazon_items_cache_v7',JSON.stringify(extraCache)); }catch(e){}
-    }
-    // Renderizar DESPUÉS de tener todos los items
-    renderAll();
-    setProgress(100);
-    setProgress(75);
+    });
+    STATE.asinMap = asinMap;
+    setProgress(70);
 
-    // 3. Eventos financieros globales
-    setLoadingText('Cargando datos financieros...','Fees, reembolsos y liquidaciones');
-    const finData=await proxyCall('finances');
-    STATE.finEvents=finData.payload?.FinancialEvents||{};
-    STATE.refundEvents=STATE.finEvents.RefundEventList||[];
+    // Eventos financieros globales
+    setLoadingText('Cargando datos financieros...', 'Fees y reembolsos');
+    const finData = await proxyCall('finances');
+    STATE.finEvents = finData.payload?.FinancialEvents || {};
+    STATE.refundEvents = STATE.finEvents.RefundEventList || [];
     setProgress(80);
 
-    // 4. Fees reales por pedido con caché
-    setLoadingText('Cargando comisiones reales...','Fees exactos por pedido desde Amazon');
-    let cachedOrderFees={};
-    try{ cachedOrderFees=JSON.parse(localStorage.getItem('amazon_order_fees_v7')||'{}'); }catch(e){}
+    // Fees reales por pedido — cargar en background desde caché + nuevos
+    setLoadingText('Cargando comisiones reales...', 'Fees exactos por pedido');
+    let cachedFees = {};
+    try { cachedFees = JSON.parse(localStorage.getItem('amazon_order_fees_v7') || '{}'); } catch(e) {}
 
-    const ordersNeedingFees=validOrders.filter(o=>cachedOrderFees[o.AmazonOrderId]===undefined);
-    const totalFeeOrders=ordersNeedingFees.length;
-    setLoadingText(`Cargando comisiones reales...`,`${validOrders.length-totalFeeOrders} en caché · ${totalFeeOrders} nuevos`);
+    const validOrders = allOrders.filter(o => o.OrderStatus !== 'Canceled');
+    const needsFees = validOrders.filter(o => cachedFees[o.AmazonOrderId] === undefined);
 
-    const feeBatch=5;
-    for(let i=0;i<totalFeeOrders;i+=feeBatch){
-      const batch=ordersNeedingFees.slice(i,i+feeBatch);
-      const results=await Promise.all(batch.map(o=>
-        proxyCall('orderFinances',{orderId:o.AmazonOrderId})
-          .then(d=>{
-            const events=d.payload?.FinancialEvents||{};
-            let totalFee=0;
-            let hasData=false;
-            (events.ShipmentEventList||[]).forEach(ev=>{
-              (ev.ShipmentItemList||[]).forEach(item=>{
-                (item.ItemFeeList||[]).forEach(fee=>{
-                  totalFee+=Math.abs(parseFloat(fee.FeeAmount?.Amount||0));
-                  hasData=true;
-                });
-              });
-            });
-            return {orderId:o.AmazonOrderId, fee:hasData?totalFee:null};
-          })
-          .catch(()=>({orderId:o.AmazonOrderId, fee:null}))
-      ));
-      results.forEach(({orderId,fee})=>{ cachedOrderFees[orderId]=fee; });
-      setProgress(80+Math.round((i/Math.max(totalFeeOrders,1))*15));
-      await new Promise(r=>setTimeout(r,150));
+    if (needsFees.length > 0) {
+      // Cargar en batches de 20 usando el nuevo endpoint finances_batch
+      for (let i = 0; i < needsFees.length; i += 20) {
+        const batch = needsFees.slice(i, i + 20);
+        const orderIds = batch.map(o => o.AmazonOrderId).join(',');
+        try {
+          const feeResult = await proxyCall('finances_batch', { orderIds });
+          Object.assign(cachedFees, feeResult.feesMap || {});
+        } catch(e) {}
+        setProgress(80 + Math.round((i / needsFees.length) * 15));
+        await new Promise(r => setTimeout(r, 200));
+      }
+      try { localStorage.setItem('amazon_order_fees_v7', JSON.stringify(cachedFees)); } catch(e) {}
     }
-
-    try{ localStorage.setItem('amazon_order_fees_v7',JSON.stringify(cachedOrderFees)); }catch(e){}
-    STATE.orderFeesMap=cachedOrderFees;
-    setProgress(95);
-
-    // 4. Render — se hace al final después de cargar todos los items faltantes
-    STATE.isLoaded=true;
+    STATE.orderFeesMap = cachedFees;
     setProgress(98);
 
-    const totalValid=validOrders.length;
-    updateStatus('live',`✓ ${allOrders.length} pedidos · ${Object.keys(asinMap).length} ASINs · ${STATE.refundEvents.length} reembolsos`,`Última act.: ${new Date().toLocaleTimeString('es-ES')} · Período: ${STATE.dateFrom} → ${STATE.dateTo}`);
+    STATE.isLoaded = true;
+    renderAll();
+    setProgress(100);
+
+    const validCount = validOrders.length;
+    const itemsCount = Object.keys(itemsMap).length;
+    updateStatus('live',
+      `✓ ${allOrders.length} pedidos · ${Object.keys(asinMap).length} ASINs · ${STATE.refundEvents.length} reembolsos`,
+      `Última act.: ${new Date().toLocaleTimeString('es-ES')} · Período: ${STATE.dateFrom} → ${STATE.dateTo} · ${itemsCount} pedidos con items`
+    );
     setConn('live');
-    document.getElementById('lastUpdate').textContent=new Date().toLocaleTimeString('es-ES');
+    document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('es-ES');
 
   } catch(err) {
     console.error(err);
-    updateStatus('error','Error al cargar datos',err.message);
-    showToast('Error: '+err.message,true);
+    updateStatus('error', 'Error al cargar datos', err.message);
+    showToast('Error: ' + err.message, true);
     setConn('error');
   } finally {
     showLoading(false);
