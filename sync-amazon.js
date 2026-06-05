@@ -93,6 +93,8 @@ async function main() {
   let nextToken = null;
   let page = 0;
   const dateTo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+  // Para reembolsos usar siempre desde inicio del año en primera sync
+  const finDateFrom = lastSync?.orders_synced === 0 ? '2026-01-01T00:00:00Z' : lastOrderDate;
 
   do {
     const url = nextToken
@@ -217,6 +219,33 @@ async function main() {
     await sleep(300);
   }
   console.log(`✓ Fees guardados (${feesProcessed} pedidos con fees reales)`);
+
+  // 6b. Cargar y guardar reembolsos
+  console.log('Cargando reembolsos...');
+  try {
+    const finData = await spApi(`/finances/v0/financialEvents?PostedAfter=${encodeURIComponent(finDateFrom)}&PostedBefore=${encodeURIComponent(dateTo)}`, token);
+    const refundEvents = finData.payload?.FinancialEvents?.RefundEventList || [];
+    console.log(`  ${refundEvents.length} reembolsos encontrados`);
+
+    if (refundEvents.length > 0) {
+      const refundsToInsert = refundEvents.map(ev => ({
+        order_id: ev.AmazonOrderId || null,
+        amount: Math.abs(parseFloat(ev.SellerCreditList?.[0]?.SellerCreditAmount?.Amount || 0)),
+        currency: ev.SellerCreditList?.[0]?.SellerCreditAmount?.CurrencyCode || 'EUR',
+        posted_date: ev.PostedDate || new Date().toISOString(),
+        raw: ev
+      })).filter(r => r.amount > 0);
+
+      if (refundsToInsert.length > 0) {
+        // Borrar reembolsos del período para evitar duplicados
+        await supabase('DELETE', 'refunds', null, `?posted_date=gte.${lastOrderDate}`).catch(e => {});
+        await supabase('POST', 'refunds', refundsToInsert);
+        console.log(`  ✓ ${refundsToInsert.length} reembolsos guardados`);
+      }
+    }
+  } catch(e) {
+    console.error('Error cargando reembolsos:', e.message);
+  }
 
   // 7. Actualizar log de sincronización
   const maxDate = allOrders.reduce((max, o) => o.PurchaseDate > max ? o.PurchaseDate : max, lastOrderDate);
