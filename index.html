@@ -864,8 +864,9 @@ function renderVentas(costs) {
     const canal=o.FulfillmentChannel==='AFN'?'FBA':'FBM';
     const units=o.NumberOfItemsShipped||0;
     const realFee=STATE.orderFeesMap[o.AmazonOrderId];
-    const feeRate=canal==='FBA'?0.20:0.15;
-    const commission=realFee!==null&&realFee!==undefined?realFee:(importe*feeRate);
+    // Comisión Amazon: siempre 15% del precio de venta (con IVA)
+    // El fee de fulfillment FBA va en la columna de portes, no aquí
+    const commission=realFee!==null&&realFee!==undefined?realFee:(importe*0.15);
     const isEstFee=realFee===null||realFee===undefined;
     const hasRefund=refundMap[o.AmazonOrderId]>0;
     const isCanceled=o.OrderStatus==='Canceled';
