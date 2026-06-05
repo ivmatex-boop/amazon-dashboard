@@ -82,6 +82,7 @@
   tbody tr:hover{background:var(--surface2);}
   tbody tr:last-child{border-bottom:none;}
   tbody tr.devolucion-row{background:rgba(255,69,103,0.05);}
+  tbody tr.sin-items{opacity:0.6;}
   td{padding:10px 14px;font-size:12px;}
   .asin-code{font-family:var(--font-mono);font-size:10px;color:var(--text-muted);display:block;}
   .product-name{font-weight:500;color:var(--text);max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
@@ -289,8 +290,8 @@
       </div>
       <div class="table-scroll">
         <table>
-          <thead><tr><th>FECHA</th><th>PEDIDO</th><th>PRODUCTO</th><th>CANAL</th><th>UNID.</th><th>TOTAL c/IVA</th><th>IVA</th><th>BASE IMPONIBLE</th><th>COMISIÓN AMZ</th><th>COSTE PROD.</th><th>COSTE ENVÍO</th><th>RENTAB. REAL</th><th>ESTADO</th></tr></thead>
-          <tbody id="ventasBody"><tr><td colspan="12" style="text-align:center;color:var(--text-muted);padding:24px">Cargando...</td></tr></tbody>
+          <thead><tr><th>FECHA</th><th>PEDIDO</th><th>PRODUCTO</th><th>ASIN</th><th>SKU</th><th>CANAL</th><th>UNID.</th><th>TOTAL c/IVA</th><th>IVA</th><th>BASE IMPONIBLE</th><th>COMISIÓN AMZ</th><th>COSTE PROD.</th><th>COSTE ENVÍO</th><th>RENTAB. REAL</th><th>ESTADO</th></tr></thead>
+          <tbody id="ventasBody"><tr><td colspan="15" style="text-align:center;color:var(--text-muted);padding:24px">Cargando...</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -526,6 +527,11 @@ async function loadAllData() {
     STATE.orderItemsMap=orderItemsMap;
     // Identificar pedidos sin items y cargarlos en background
     const missingItems=validOrders.filter(o=>!STATE.orderItemsMap[o.AmazonOrderId]||STATE.orderItemsMap[o.AmazonOrderId].length===0);
+    if(missingItems.length===0){
+      // Todos los items ya están en caché — renderizar directamente
+      renderAll();
+      setProgress(100);
+    }
     if(missingItems.length>0){
       setLoadingText(`Completando items faltantes...`,`${missingItems.length} pedidos sin items`);
       let extraCache={};
@@ -554,6 +560,9 @@ async function loadAllData() {
       }
       try{ localStorage.setItem('amazon_items_cache_v7',JSON.stringify(extraCache)); }catch(e){}
     }
+    // Renderizar DESPUÉS de tener todos los items
+    renderAll();
+    setProgress(100);
     setProgress(75);
 
     // 3. Eventos financieros globales
@@ -602,10 +611,9 @@ async function loadAllData() {
     STATE.orderFeesMap=cachedOrderFees;
     setProgress(95);
 
-    // 4. Render
+    // 4. Render — se hace al final después de cargar todos los items faltantes
     STATE.isLoaded=true;
-    renderAll();
-    setProgress(100);
+    setProgress(98);
 
     const totalValid=validOrders.length;
     updateStatus('live',`✓ ${allOrders.length} pedidos · ${Object.keys(asinMap).length} ASINs · ${STATE.refundEvents.length} reembolsos`,`Última act.: ${new Date().toLocaleTimeString('es-ES')} · Período: ${STATE.dateFrom} → ${STATE.dateTo}`);
@@ -892,16 +900,26 @@ function renderVentas(costs) {
     const estadoES=estadoMap[o.OrderStatus]||o.OrderStatus;
     const estadoColor=o.OrderStatus==='Shipped'||o.OrderStatus==='Delivered'?'val-green':o.OrderStatus==='Canceled'?'val-red':'val-yellow';
 
-    // Nombre producto principal
+    // Nombre, ASIN y SKU del producto principal
     const mainItem=items[0];
-    const prodName=mainItem?(mainItem.Title||mainItem.ASIN||'—').substring(0,35):'—';
-    const extraItems=items.length>1?` <span style="color:var(--text-muted);font-size:10px">+${items.length-1} más</span>`:'';
+    const prodName=mainItem?(mainItem.Title||'—').substring(0,40):'—';
+    const mainAsin=mainItem?mainItem.ASIN:'—';
+    const mainSku=mainItem?(mainItem.SellerSKU||'—'):'—';
+    const extraItems=items.length>1?` <span style="color:var(--text-muted);font-size:10px">+${items.length-1} líneas</span>`:'';
+    // Si no hay items en caché, marcar visualmente
+    const noItems=items.length===0;
 
     tbody.innerHTML+=`
       <tr class="${hasRefund?'devolucion-row':''}">
         <td style="font-family:var(--font-mono);font-size:11px;color:var(--text-dim);white-space:nowrap">${fecha}</td>
         <td style="font-family:var(--font-mono);font-size:10px;white-space:nowrap">${o.AmazonOrderId}</td>
-        <td><span class="product-name">${prodName}</span>${extraItems}${hasRefund?'<span class="badge badge-dev" style="display:block;margin-top:3px;width:fit-content">● DEVOLUCIÓN</span>':''}</td>
+        <td>
+          <span class="product-name" style="max-width:200px">${prodName}</span>
+          ${extraItems}
+          ${hasRefund?'<span class="badge badge-dev" style="display:block;margin-top:3px;width:fit-content">● DEVOLUCIÓN</span>':''}
+        </td>
+        <td style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)">${mainAsin}</td>
+        <td style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted)">${mainSku}</td>
         <td><span class="badge badge-${canal.toLowerCase()}">${canal}</span></td>
         <td>${units}</td>
         <td><strong>${isCanceled?'<span class="val-red">Cancelado</span>':'€'+importe.toFixed(2)}</strong></td>
@@ -1118,7 +1136,7 @@ function exportExcel() {
   const costs=getCosts();
 
   // Pedidos
-  const oData=[['Fecha','Pedido','Estado','Total c/IVA','IVA','Base Imponible','Canal','Unidades','Comisión AMZ est.','Coste Prod.','Coste Envío','Rentab. Real']];
+  const oData=[['Fecha','Pedido','Producto','ASIN','SKU','Estado','Total c/IVA','IVA','Base Imponible','Canal','Unidades','Comisión AMZ','Coste Prod.','Coste Envío','Rentab. Real']];
   STATE.orders.forEach(o=>{
     const imp=parseFloat(o.OrderTotal?.Amount||0);
     const iva=imp-(imp/(1+IVA_RATE));
@@ -1127,13 +1145,20 @@ function exportExcel() {
     let coste=0;
     (STATE.orderItemsMap[o.AmazonOrderId]||[]).forEach(item=>{coste+=(costs[item.ASIN]?.cost||0)*(item.QuantityOrdered||0);});
     let maxShipExcel=0;
-    (STATE.orderItemsMap[o.AmazonOrderId]||[]).forEach(item=>{
-      const canalEx=o.FulfillmentChannel==='AFN'?'FBA':'FBM';
-      const cEx=costs[item.ASIN+'_'+canalEx]||costs[item.ASIN]||{};
+    const canalEx=o.FulfillmentChannel==='AFN'?'FBA':'FBM';
+    const itemsEx=STATE.orderItemsMap[o.AmazonOrderId]||[];
+    let costeEx=0;
+    itemsEx.forEach(item=>{
+      const cEx=costs[item.ASIN+'_'+canalEx]||costs[item.ASIN+'_FBM']||costs[item.ASIN+'_FBA']||{};
+      costeEx+=(cEx.cost||0)*(item.QuantityOrdered||0);
       if((cEx.shipping||0)>maxShipExcel)maxShipExcel=cEx.shipping||0;
     });
     const baseEx=imp/1.21;
-    oData.push([new Date(o.PurchaseDate).toLocaleDateString('es-ES'),o.AmazonOrderId,o.OrderStatus,imp.toFixed(2),(imp-baseEx).toFixed(2),baseEx.toFixed(2),o.FulfillmentChannel==='AFN'?'FBA':'FBM',o.NumberOfItemsShipped||0,commission.toFixed(2),coste.toFixed(2),maxShipExcel.toFixed(2),(baseEx-commission-coste-maxShipExcel).toFixed(2)]);
+    const mainEx=itemsEx[0];
+    const feeEx=STATE.orderFeesMap[o.AmazonOrderId];
+    const feeRateEx=canalEx==='FBA'?0.20:0.15;
+    const commissionEx=feeEx!==null&&feeEx!==undefined?feeEx:(imp*feeRateEx);
+    oData.push([new Date(o.PurchaseDate).toLocaleDateString('es-ES'),o.AmazonOrderId,mainEx?(mainEx.Title||'').substring(0,50):'',mainEx?mainEx.ASIN:'',mainEx?(mainEx.SellerSKU||''):'',o.OrderStatus,imp.toFixed(2),(imp-baseEx).toFixed(2),baseEx.toFixed(2),canalEx,o.NumberOfItemsShipped||0,commissionEx.toFixed(2),costeEx.toFixed(2),maxShipExcel.toFixed(2),(baseEx-commissionEx-costeEx-maxShipExcel).toFixed(2)]);
   });
   const wsO=XLSX.utils.aoa_to_sheet(oData);
   wsO['!cols']=[{wch:12},{wch:22},{wch:14},{wch:12},{wch:10},{wch:14},{wch:6},{wch:8},{wch:14},{wch:12},{wch:12}];
