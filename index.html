@@ -271,11 +271,12 @@
   <div class="tab-content" id="tab-ventas">
     <div class="section-title">Ventas y facturación</div>
     <div class="section-sub">Datos reales de Amazon España — pedidos agrupados con desglose completo</div>
-    <div class="kpi-grid">
+    <div class="kpi-grid" style="grid-template-columns:repeat(5,1fr)">
       <div class="kpi-card orange"><div class="kpi-label">Facturación total</div><div class="kpi-value" id="kpi-facturacion">—</div><div class="kpi-sub">IVA incluido</div></div>
       <div class="kpi-card"><div class="kpi-label">Base imponible</div><div class="kpi-value" id="kpi-base">—</div><div class="kpi-sub">sin IVA (21%)</div></div>
       <div class="kpi-card"><div class="kpi-label">Pedidos</div><div class="kpi-value" id="kpi-pedidos">—</div><div class="kpi-sub">pedidos válidos</div></div>
-      <div class="kpi-card green"><div class="kpi-label">Ticket medio</div><div class="kpi-value" id="kpi-ticket">—</div><div class="kpi-sub">por pedido (con IVA)</div></div>
+      <div class="kpi-card"><div class="kpi-label">Ticket medio</div><div class="kpi-value" id="kpi-ticket">—</div><div class="kpi-sub">por pedido (con IVA)</div></div>
+      <div class="kpi-card green"><div class="kpi-label">Rentabilidad real total</div><div class="kpi-value" id="kpi-rentab-real" style="color:var(--green)">—</div><div class="kpi-sub">base - comisión - coste - envío</div></div>
     </div>
     <div class="charts-row">
       <div class="chart-card"><div class="chart-title">Ventas por día</div><div class="chart-wrap"><canvas id="ventasChart"></canvas></div></div>
@@ -528,6 +529,34 @@ async function loadAllData() {
     }
     STATE.asinMap=asinMap;
     STATE.orderItemsMap=orderItemsMap;
+    // Identificar pedidos sin items y cargarlos en background
+    const missingItems=validOrders.filter(o=>!STATE.orderItemsMap[o.AmazonOrderId]||STATE.orderItemsMap[o.AmazonOrderId].length===0);
+    if(missingItems.length>0){
+      setLoadingText(`Completando items faltantes...`,`${missingItems.length} pedidos sin items`);
+      for(let i=0;i<missingItems.length;i+=batchSize){
+        const batch=missingItems.slice(i,i+batchSize);
+        const results=await Promise.all(batch.map(o=>
+          proxyCall('orderItems',{orderId:o.AmazonOrderId})
+            .then(d=>({orderId:o.AmazonOrderId,items:d.payload?.OrderItems||[]}))
+            .catch(()=>({orderId:o.AmazonOrderId,items:[]}))
+        ));
+        results.forEach(({orderId,items})=>{
+          cachedItems[orderId]=items;
+          STATE.orderItemsMap[orderId]=items;
+          const order=STATE.orders.find(o=>o.AmazonOrderId===orderId);
+          const canal=order?.FulfillmentChannel==='AFN'?'FBA':'FBM';
+          items.forEach(item=>{
+            const asin=item.ASIN;
+            const key=asin+'_'+canal;
+            if(!STATE.asinMap[key])STATE.asinMap[key]={asin,key,canal,name:item.Title,units:0,revenue:0};
+            STATE.asinMap[key].units+=item.QuantityOrdered||0;
+            STATE.asinMap[key].revenue+=parseFloat(item.ItemPrice?.Amount||0);
+          });
+        });
+        await new Promise(r=>setTimeout(r,150));
+      }
+      try{ localStorage.setItem('amazon_items_cache_v7',JSON.stringify(cachedItems)); }catch(e){}
+    }
     setProgress(75);
 
     // 3. Eventos financieros globales
@@ -783,6 +812,30 @@ function renderVentas(costs) {
   document.getElementById('kpi-base').textContent='€'+baseImponible.toFixed(0);
   document.getElementById('kpi-pedidos').textContent=validOrders.length;
   document.getElementById('kpi-ticket').textContent=validOrders.length>0?'€'+(totalRev/validOrders.length).toFixed(2):'—';
+  // Calcular rentabilidad real total sumando todas las filas
+  let totalRentabReal=0;
+  STATE.orders.filter(o=>o.OrderStatus!=='Canceled'&&o.OrderStatus!=='Pending').forEach(o=>{
+    const imp=parseFloat(o.OrderTotal?.Amount||0);
+    const base=imp/1.21;
+    const canalO=o.FulfillmentChannel==='AFN'?'FBA':'FBM';
+    const feeRate=canalO==='FBA'?0.20:0.15;
+    const realFeeO=STATE.orderFeesMap[o.AmazonOrderId];
+    const commissionO=realFeeO!==null&&realFeeO!==undefined?realFeeO:(imp*feeRate);
+    let costePedidoO=0,maxShippingO=0;
+    const itemsO=STATE.orderItemsMap[o.AmazonOrderId]||[];
+    itemsO.forEach(item=>{
+      const itemKey=item.ASIN+'_'+canalO;
+      const cO=costs[itemKey]||costs[item.ASIN+'_FBM']||costs[item.ASIN+'_FBA']||{};
+      costePedidoO+=(cO.cost||0)*(item.QuantityOrdered||0);
+      if((cO.shipping||0)>maxShippingO)maxShippingO=cO.shipping||0;
+    });
+    totalRentabReal+=base-commissionO-costePedidoO-maxShippingO;
+  });
+  const rentabEl=document.getElementById('kpi-rentab-real');
+  if(rentabEl){
+    rentabEl.textContent='€'+totalRentabReal.toFixed(0);
+    rentabEl.style.color=totalRentabReal>=0?'var(--green)':'var(--red)';
+  }
 
   // Mapa de reembolsos por pedido
   const refundMap={};
@@ -1204,3 +1257,4 @@ loadAllData();
 </script>
 </body>
 </html>
+
