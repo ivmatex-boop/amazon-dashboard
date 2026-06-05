@@ -228,13 +228,24 @@ async function main() {
     console.log(`  ${refundEvents.length} reembolsos encontrados`);
 
     if (refundEvents.length > 0) {
-      const refundsToInsert = refundEvents.map(ev => ({
-        order_id: ev.AmazonOrderId || null,
-        amount: Math.abs(parseFloat(ev.SellerCreditList?.[0]?.SellerCreditAmount?.Amount || 0)),
-        currency: ev.SellerCreditList?.[0]?.SellerCreditAmount?.CurrencyCode || 'EUR',
-        posted_date: ev.PostedDate || new Date().toISOString(),
-        raw: ev
-      })).filter(r => r.amount > 0);
+      const refundsToInsert = refundEvents.map(ev => {
+        // El importe del reembolso está en ItemChargeAdjustmentList con ChargeType=Principal
+        let amount = 0;
+        (ev.ShipmentItemAdjustmentList || []).forEach(item => {
+          (item.ItemChargeAdjustmentList || []).forEach(charge => {
+            if (charge.ChargeType === 'Principal') {
+              amount += Math.abs(parseFloat(charge.ChargeAmount?.CurrencyAmount || 0));
+            }
+          });
+        });
+        return {
+          order_id: ev.AmazonOrderId || null,
+          amount: amount,
+          currency: 'EUR',
+          posted_date: ev.PostedDate || new Date().toISOString(),
+          raw: ev
+        };
+      }).filter(r => r.amount > 0);
 
       if (refundsToInsert.length > 0) {
         // Borrar reembolsos del período para evitar duplicados
@@ -245,6 +256,120 @@ async function main() {
     }
   } catch(e) {
     console.error('Error cargando reembolsos:', e.message);
+  }
+
+  // 6c. Procesar eventos financieros adicionales
+  console.log('Procesando gastos y reembolsos adicionales...');
+  try {
+    const finEvents = finData.payload?.FinancialEvents || {};
+    const periodMonth = new Date(lastOrderDate).toISOString().slice(0, 7); // YYYY-MM
+
+    // Publicidad
+    const adEvents = finEvents.ProductAdsPaymentEventList || [];
+    if (adEvents.length > 0) {
+      await supabase('DELETE', 'amazon_charges', null, `?charge_type=eq.advertising&period_month=eq.${periodMonth}`).catch(() => {});
+      const adCharges = adEvents.map(ev => ({
+        marketplace: 'ES',
+        charge_type: 'advertising',
+        description: `Publicidad Amazon ${periodMonth}`,
+        amount: Math.abs(parseFloat(ev.transactionValue?.CurrencyAmount || ev.baseValue?.CurrencyAmount || 0)),
+        currency: 'EUR',
+        posted_date: ev.postedDate || new Date().toISOString(),
+        period_month: periodMonth,
+        raw: ev
+      })).filter(c => c.amount > 0);
+      if (adCharges.length > 0) {
+        await supabase('POST', 'amazon_charges', adCharges);
+        console.log(`  ✓ ${adCharges.length} cargos publicidad guardados (total: €${adCharges.reduce((s,c)=>s+c.amount,0).toFixed(2)})`);
+      }
+    }
+
+    // Cuota suscripción y almacenamiento FBA
+    const serviceFees = finEvents.ServiceFeeEventList || [];
+    const feeCharges = [];
+    serviceFees.forEach(ev => {
+      (ev.FeeList || []).forEach(fee => {
+        const amount = Math.abs(parseFloat(fee.FeeAmount?.CurrencyAmount || 0));
+        if (amount > 0) {
+          feeCharges.push({
+            marketplace: 'ES',
+            charge_type: fee.FeeType === 'Subscription' ? 'subscription' : 'fba_storage',
+            description: ev.FeeDescription || fee.FeeType,
+            amount,
+            currency: fee.FeeAmount?.CurrencyCode || 'EUR',
+            posted_date: new Date().toISOString(),
+            period_month: periodMonth,
+            raw: ev
+          });
+        }
+      });
+    });
+    if (feeCharges.length > 0) {
+      await supabase('DELETE', 'amazon_charges', null, `?charge_type=in.(subscription,fba_storage)&period_month=eq.${periodMonth}`).catch(() => {});
+      await supabase('POST', 'amazon_charges', feeCharges);
+      console.log(`  ✓ ${feeCharges.length} cargos fijos guardados`);
+    }
+
+    // Cargos por portes de devolución (AdjustmentEventList con ReturnPostageBilling)
+    const adjustments = finEvents.AdjustmentEventList || [];
+    const postageAdjustments = adjustments.filter(ev =>
+      ev.AdjustmentType?.includes('ReturnPostageBilling_Postage') ||
+      ev.AdjustmentType?.includes('ReturnPostageBilling_VAT')
+    );
+    if (postageAdjustments.length > 0) {
+      const postageToInsert = postageAdjustments.map(ev => ({
+        order_id: null, // No viene vinculado a pedido en este endpoint
+        amount: Math.abs(parseFloat(ev.AdjustmentAmount?.CurrencyAmount || 0)),
+        currency: ev.AdjustmentAmount?.CurrencyCode || 'EUR',
+        posted_date: ev.PostedDate || new Date().toISOString(),
+        raw: ev
+      })).filter(p => p.amount > 0);
+      if (postageToInsert.length > 0) {
+        await supabase('POST', 'return_postage', postageToInsert);
+        console.log(`  ✓ ${postageToInsert.length} cargos portes devolución guardados`);
+      }
+    }
+
+    // Reembolsos SAFET
+    const safetEvents = finEvents.SAFETReimbursementEventList || [];
+    if (safetEvents.length > 0) {
+      const safetToInsert = safetEvents.map(ev => ({
+        marketplace: 'ES',
+        claim_id: ev.SAFETClaimId,
+        amount: Math.abs(parseFloat(ev.ReimbursedAmount?.CurrencyAmount || 0)),
+        currency: ev.ReimbursedAmount?.CurrencyCode || 'EUR',
+        reason_code: ev.ReasonCode,
+        product_description: ev.SAFETReimbursementItemList?.[0]?.productDescription || '',
+        posted_date: ev.PostedDate || new Date().toISOString(),
+        raw: ev
+      })).filter(s => s.amount > 0);
+      if (safetToInsert.length > 0) {
+        await supabase('POST', 'safet_reimbursements', safetToInsert);
+        console.log(`  ✓ ${safetToInsert.length} reembolsos SAFET guardados (total: €${safetToInsert.reduce((s,r)=>s+r.amount,0).toFixed(2)})`);
+      }
+    }
+
+    // Ajustes FBA (otros ajustes no relacionados con portes)
+    const fbaAdjustments = adjustments.filter(ev =>
+      !ev.AdjustmentType?.includes('ReturnPostageBilling')
+    );
+    if (fbaAdjustments.length > 0) {
+      const fbaToInsert = fbaAdjustments.map(ev => ({
+        marketplace: 'ES',
+        adjustment_type: ev.AdjustmentType,
+        amount: parseFloat(ev.AdjustmentAmount?.CurrencyAmount || 0),
+        currency: ev.AdjustmentAmount?.CurrencyCode || 'EUR',
+        posted_date: ev.PostedDate || new Date().toISOString(),
+        raw: ev
+      })).filter(f => f.amount !== 0);
+      if (fbaToInsert.length > 0) {
+        await supabase('POST', 'fba_adjustments', fbaToInsert);
+        console.log(`  ✓ ${fbaToInsert.length} ajustes FBA guardados`);
+      }
+    }
+
+  } catch(e) {
+    console.error('Error procesando gastos adicionales:', e.message);
   }
 
   // 7. Actualizar log de sincronización
