@@ -220,48 +220,99 @@ async function main() {
   }
   console.log(`✓ Fees guardados (${feesProcessed} pedidos con fees reales)`);
 
-  // 6b. Cargar y guardar reembolsos
-  console.log('Cargando reembolsos...');
+  // 6b + 6c. Cargar eventos financieros con paginación completa
+  console.log('Cargando eventos financieros (paginación completa)...');
+  // Usar siempre desde inicio del año para capturar todos los datos
+  const finDateFromFull = '2026-01-01T00:00:00Z';
+  
+  let allShipmentEvents = [];
+  let allRefundEvents = [];
+  let allAdEvents = [];
+  let allServiceFees = [];
+  let allAdjustments = [];
+  let allSafetEvents = [];
+  let finNextToken = null;
+  let finPage = 0;
+
   try {
-    const finData = await spApi(`/finances/v0/financialEvents?PostedAfter=${encodeURIComponent(finDateFrom)}&PostedBefore=${encodeURIComponent(dateTo)}`, token);
-    const refundEvents = finData.payload?.FinancialEvents?.RefundEventList || [];
-    console.log(`  ${refundEvents.length} reembolsos encontrados`);
+    do {
+      const finUrl = finNextToken
+        ? `/finances/v0/financialEvents?NextToken=${encodeURIComponent(finNextToken)}`
+        : `/finances/v0/financialEvents?PostedAfter=${encodeURIComponent(finDateFromFull)}&PostedBefore=${encodeURIComponent(dateTo)}`;
 
-    if (refundEvents.length > 0) {
-      const refundsToInsert = refundEvents.map(ev => {
-        // El importe del reembolso está en ItemChargeAdjustmentList con ChargeType=Principal
-        let amount = 0;
-        (ev.ShipmentItemAdjustmentList || []).forEach(item => {
-          (item.ItemChargeAdjustmentList || []).forEach(charge => {
-            if (charge.ChargeType === 'Principal') {
-              amount += Math.abs(parseFloat(charge.ChargeAmount?.CurrencyAmount || 0));
-            }
-          });
-        });
-        return {
-          order_id: ev.AmazonOrderId || null,
-          amount: amount,
-          currency: 'EUR',
-          posted_date: ev.PostedDate || new Date().toISOString(),
-          raw: ev
-        };
-      }).filter(r => r.amount > 0);
+      const finResp = await spApi(finUrl, token);
+      const ev = finResp.payload?.FinancialEvents || {};
 
-      if (refundsToInsert.length > 0) {
-        // Borrar reembolsos del período para evitar duplicados
-        await supabase('DELETE', 'refunds', null, `?posted_date=gte.${lastOrderDate}`).catch(e => {});
-        await supabase('POST', 'refunds', refundsToInsert);
-        console.log(`  ✓ ${refundsToInsert.length} reembolsos guardados`);
-      }
-    }
+      allShipmentEvents = allShipmentEvents.concat(ev.ShipmentEventList || []);
+      allRefundEvents = allRefundEvents.concat(ev.RefundEventList || []);
+      allAdEvents = allAdEvents.concat(ev.ProductAdsPaymentEventList || []);
+      allServiceFees = allServiceFees.concat(ev.ServiceFeeEventList || []);
+      allAdjustments = allAdjustments.concat(ev.AdjustmentEventList || []);
+      allSafetEvents = allSafetEvents.concat(ev.SAFETReimbursementEventList || []);
+
+      finNextToken = finResp.payload?.NextToken || null;
+      finPage++;
+      console.log(`  Página ${finPage}: ${(ev.ShipmentEventList||[]).length} envíos, ${(ev.RefundEventList||[]).length} reembolsos`);
+      if (finNextToken) await sleep(500);
+    } while (finNextToken && finPage < 50);
+
+    console.log(`✓ Finanzas: ${allShipmentEvents.length} envíos, ${allRefundEvents.length} reembolsos, ${allAdEvents.length} publicidad`);
   } catch(e) {
-    console.error('Error cargando reembolsos:', e.message);
+    console.error('Error cargando eventos financieros:', e.message);
   }
 
-  // 6c. Procesar eventos financieros adicionales
-  console.log('Procesando gastos y reembolsos adicionales...');
+  // Guardar fees desde eventos financieros
+  if (allShipmentEvents.length > 0) {
+    const feesMap2 = {};
+    allShipmentEvents.forEach(ev => {
+      const orderId = ev.AmazonOrderId;
+      if (!orderId) return;
+      let totalFee = 0;
+      (ev.ShipmentItemList || []).forEach(item => {
+        (item.ItemFeeList || []).forEach(fee => {
+          totalFee += Math.abs(parseFloat(fee.FeeAmount?.CurrencyAmount || 0));
+        });
+      });
+      if (totalFee > 0) feesMap2[orderId] = (feesMap2[orderId] || 0) + totalFee;
+    });
+    const feesToInsert2 = Object.entries(feesMap2).map(([order_id, total_fee]) => ({
+      order_id, total_fee, is_estimated: false, updated_at: new Date().toISOString()
+    }));
+    if (feesToInsert2.length > 0) {
+      // Borrar fees existentes y reinsertar
+      await supabase('DELETE', 'order_fees', null, '?order_id=neq.null').catch(() => {});
+      for (let i = 0; i < feesToInsert2.length; i += 100) {
+        await supabase('POST', 'order_fees', feesToInsert2.slice(i, i + 100));
+      }
+      console.log(`✓ ${feesToInsert2.length} fees reales guardados desde eventos financieros`);
+    }
+  }
+
+  // Guardar reembolsos
+  if (allRefundEvents.length > 0) {
+    const refundsToInsert = allRefundEvents.map(ev => {
+      let amount = 0;
+      (ev.ShipmentItemAdjustmentList || []).forEach(item => {
+        (item.ItemChargeAdjustmentList || []).forEach(charge => {
+          if (charge.ChargeType === 'Principal') {
+            amount += Math.abs(parseFloat(charge.ChargeAmount?.CurrencyAmount || 0));
+          }
+        });
+      });
+      return { order_id: ev.AmazonOrderId || null, amount, currency: 'EUR', posted_date: ev.PostedDate || new Date().toISOString(), raw: ev };
+    }).filter(r => r.amount > 0);
+
+    if (refundsToInsert.length > 0) {
+      await supabase('DELETE', 'refunds', null, '?order_id=neq.null').catch(() => {});
+      await supabase('POST', 'refunds', refundsToInsert);
+      console.log(`✓ ${refundsToInsert.length} reembolsos guardados`);
+    }
+  }
+
+  // Procesar gastos adicionales
+  console.log('Procesando gastos adicionales...');
   try {
-    const finEvents = finData.payload?.FinancialEvents || {};
+    const finEvents = { ProductAdsPaymentEventList: allAdEvents, ServiceFeeEventList: allServiceFees, AdjustmentEventList: allAdjustments, SAFETReimbursementEventList: allSafetEvents };
     const periodMonth = new Date(lastOrderDate).toISOString().slice(0, 7); // YYYY-MM
 
     // Publicidad
