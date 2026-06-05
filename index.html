@@ -376,7 +376,29 @@
 // ============================================================
 // CONFIG
 // ============================================================
-const PROXY = 'https://amazon-sp-proxy.tiny-salad-0cdf.workers.dev';
+const PROXY = 'https://amazon-sp-proxy.tiny-salad-0cdf.workers.dev'; // backup
+const SUPABASE_URL = 'https://bhqutqkqvtqebndxrhob.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_TMqI8fBw-M43NDOUaQAIkA_thIn6qRK';
+
+// ============================================================
+// SUPABASE CLIENT
+// ============================================================
+async function sbFetch(table, query='', options={}) {
+  const url = `${SUPABASE_URL}/rest/v1/${table}${query}`;
+  const res = await fetch(url, {
+    method: options.method || 'GET',
+    headers: {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'count=exact',
+      ...( options.headers || {} )
+    },
+    body: options.body ? JSON.stringify(options.body) : undefined
+  });
+  if (!res.ok) throw new Error(`Supabase ${table}: ${res.status}`);
+  return res.json();
+}
 const IVA_RATE = 0.21;
 
 // ============================================================
@@ -472,79 +494,73 @@ async function proxyCall(action, extraParams={}) {
 // CARGA PRINCIPAL
 // ============================================================
 function clearCacheAndReload() {
-  try{ localStorage.removeItem('amazon_items_cache_v7'); }catch(e){}
-  try{ localStorage.removeItem('amazon_order_fees_v7'); }catch(e){}
-  try{ localStorage.removeItem('amazon_orders_cache_v7'); }catch(e){}
-  showToast('Caché borrado — recargando todo...');
-  setTimeout(()=>loadAllData(), 500);
+  showToast('Recargando datos desde Supabase...');
+  setTimeout(()=>loadAllData(), 300);
 }
 
 async function loadAllData() {
-  showLoading(true, 'Conectando con Amazon SP-API...', 'Cargando pedidos...');
-  setProgress(5);
+  showLoading(true, 'Cargando datos...', 'Leyendo desde Supabase');
+  setProgress(10);
 
   try {
-    // FASE 1: Cargar todos los pedidos (Worker pagina internamente)
-    setLoadingText('Cargando pedidos...', 'El Worker está paginando Amazon...');
-    const ordersResult = await proxyCall('orders_with_items');
-    const allOrders = ordersResult.payload?.Orders || [];
-    // ItemsMap puede estar vacío si el Worker tardó demasiado — no importa
-    const partialItemsMap = ordersResult.payload?.ItemsMap || {};
+    // 1. Cargar pedidos desde Supabase
+    setLoadingText('Cargando pedidos...', 'Desde Supabase');
+    const dateFromISO = STATE.dateFrom + 'T00:00:00Z';
+    const dateToISO = STATE.dateTo + 'T23:59:59Z';
 
-    STATE.orders = allOrders;
-    setProgress(40);
-    setLoadingText(`${allOrders.length} pedidos cargados`, 'Cargando items de cada pedido...');
+    // Paginación Supabase (max 1000 por llamada)
+    let allOrders = [];
+    let offset = 0;
+    const pageSize = 1000;
+    while(true) {
+      const batch = await sbFetch('orders',
+        `?purchase_date=gte.${dateFromISO}&purchase_date=lte.${dateToISO}&order=purchase_date.asc&limit=${pageSize}&offset=${offset}`
+      );
+      allOrders = allOrders.concat(batch);
+      if (batch.length < pageSize) break;
+      offset += pageSize;
+    }
+    STATE.orders = allOrders.map(o => ({
+      AmazonOrderId: o.id,
+      PurchaseDate: o.purchase_date,
+      OrderStatus: o.status,
+      FulfillmentChannel: o.fulfillment_channel,
+      OrderTotal: { Amount: o.amount, CurrencyCode: o.currency },
+      NumberOfItemsShipped: o.num_items_shipped
+    }));
+    setProgress(35);
+    setLoadingText(`${STATE.orders.length} pedidos cargados`, 'Cargando items...');
 
-    // FASE 2: Items — usar caché + cargar los que faltan
-    let itemsCache = {};
-    try { itemsCache = JSON.parse(localStorage.getItem('amazon_items_cache_v7') || '{}'); } catch(e) {}
-
-    // Merge items del Worker (si los devolvió) con caché existente
-    Object.assign(itemsCache, partialItemsMap);
-
-    const validOrders = allOrders.filter(o => o.OrderStatus !== 'Canceled');
-    const missing = validOrders.filter(o => !itemsCache[o.AmazonOrderId] || itemsCache[o.AmazonOrderId].length === 0);
-
-    if (missing.length > 0) {
-      setLoadingText(`Cargando items faltantes...`, `${missing.length} pedidos sin items · ${validOrders.length - missing.length} ya en caché`);
-
-      // Cargar en batches de 3 con reintentos individuales
-      for (let i = 0; i < missing.length; i += 3) {
-        const batch = missing.slice(i, i + 3);
-        await Promise.all(batch.map(async o => {
-          for (let attempt = 0; attempt < 3; attempt++) {
-            try {
-              const data = await proxyCall('orderItems', { orderId: o.AmazonOrderId });
-              itemsCache[o.AmazonOrderId] = data.payload?.OrderItems || [];
-              break;
-            } catch(e) {
-              if (attempt < 2) await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
-              else itemsCache[o.AmazonOrderId] = [];
-            }
-          }
-        }));
-
-        // Guardar caché cada 30 pedidos
-        if (i % 30 === 0) {
-          try { localStorage.setItem('amazon_items_cache_v7', JSON.stringify(itemsCache)); } catch(e) {}
-        }
-
-        const done = Math.min(i + 3, missing.length);
-        setProgress(40 + Math.round((done / missing.length) * 30));
-        setLoadingText(`Items: ${done}/${missing.length}`, `${validOrders.length - missing.length + done} pedidos completos`);
-        await new Promise(r => setTimeout(r, 200));
-      }
-
-      // Guardar caché final
-      try { localStorage.setItem('amazon_items_cache_v7', JSON.stringify(itemsCache)); } catch(e) {}
+    // 2. Cargar items desde Supabase
+    const orderIds = allOrders.filter(o=>o.status!=='Canceled').map(o=>o.id);
+    let allItems = [];
+    for (let i = 0; i < orderIds.length; i += 500) {
+      const batch = orderIds.slice(i, i+500);
+      const items = await sbFetch('order_items',
+        `?order_id=in.(${batch.join(',')})&limit=2000`
+      );
+      allItems = allItems.concat(items);
     }
 
-    STATE.orderItemsMap = itemsCache;
+    // Construir orderItemsMap
+    const orderItemsMap = {};
+    allItems.forEach(item => {
+      if (!orderItemsMap[item.order_id]) orderItemsMap[item.order_id] = [];
+      orderItemsMap[item.order_id].push({
+        ASIN: item.asin,
+        SellerSKU: item.sku,
+        Title: item.title,
+        QuantityOrdered: item.quantity,
+        ItemPrice: { Amount: item.item_price }
+      });
+    });
+    STATE.orderItemsMap = orderItemsMap;
+    setProgress(60);
 
-    // Construir asinMap
+    // 3. Construir asinMap
     const asinMap = {};
-    validOrders.forEach(order => {
-      const items = itemsCache[order.AmazonOrderId] || [];
+    STATE.orders.filter(o=>o.OrderStatus!=='Canceled').forEach(order => {
+      const items = orderItemsMap[order.AmazonOrderId] || [];
       const canal = order.FulfillmentChannel === 'AFN' ? 'FBA' : 'FBM';
       items.forEach(item => {
         const key = item.ASIN + '_' + canal;
@@ -554,45 +570,45 @@ async function loadAllData() {
       });
     });
     STATE.asinMap = asinMap;
-    setProgress(72);
+    setProgress(70);
 
-    // FASE 3: Eventos financieros
-    setLoadingText('Cargando datos financieros...', 'Fees y reembolsos');
-    try {
-      const finData = await proxyCall('finances');
-      STATE.finEvents = finData.payload?.FinancialEvents || {};
-      STATE.refundEvents = STATE.finEvents.RefundEventList || [];
-    } catch(e) { STATE.finEvents = {}; STATE.refundEvents = []; }
-    setProgress(82);
-
-    // FASE 4: Fees reales por pedido
-    setLoadingText('Cargando comisiones reales...', 'Fees por pedido');
-    let cachedFees = {};
-    try { cachedFees = JSON.parse(localStorage.getItem('amazon_order_fees_v7') || '{}'); } catch(e) {}
-    const needsFees = validOrders.filter(o => cachedFees[o.AmazonOrderId] === undefined);
-
-    for (let i = 0; i < needsFees.length; i += 20) {
-      const batch = needsFees.slice(i, i + 20);
-      const orderIds = batch.map(o => o.AmazonOrderId).join(',');
-      try {
-        const feeResult = await proxyCall('finances_batch', { orderIds });
-        Object.assign(cachedFees, feeResult.feesMap || {});
-      } catch(e) {}
-      setProgress(82 + Math.round((i / Math.max(needsFees.length, 1)) * 15));
-      if (i + 20 < needsFees.length) await new Promise(r => setTimeout(r, 300));
+    // 4. Cargar fees desde Supabase
+    setLoadingText('Cargando comisiones...', 'Fees reales');
+    let allFees = [];
+    for (let i = 0; i < orderIds.length; i += 500) {
+      const batch = orderIds.slice(i, i+500);
+      const fees = await sbFetch('order_fees',
+        `?order_id=in.(${batch.join(',')})&limit=2000`
+      );
+      allFees = allFees.concat(fees);
     }
-    try { localStorage.setItem('amazon_order_fees_v7', JSON.stringify(cachedFees)); } catch(e) {}
-    STATE.orderFeesMap = cachedFees;
-    setProgress(98);
+    const orderFeesMap = {};
+    allFees.forEach(f => { orderFeesMap[f.order_id] = f.total_fee; });
+    STATE.orderFeesMap = orderFeesMap;
+    setProgress(85);
+
+    // 5. Cargar reembolsos desde Supabase
+    setLoadingText('Cargando reembolsos...', '');
+    const refunds = await sbFetch('refunds',
+      `?posted_date=gte.${dateFromISO}&posted_date=lte.${dateToISO}&limit=1000`
+    );
+    STATE.refundEvents = refunds.map(r => ({
+      AmazonOrderId: r.order_id,
+      PostedDate: r.posted_date,
+      SellerCreditList: [{ SellerCreditAmount: { Amount: r.amount, CurrencyCode: r.currency } }]
+    }));
+    STATE.finEvents = { ShipmentEventList: [] };
+    setProgress(95);
 
     STATE.isLoaded = true;
     renderAll();
     setProgress(100);
 
-    const itemsLoaded = validOrders.filter(o => (itemsCache[o.AmazonOrderId]||[]).length > 0).length;
+    const validCount = STATE.orders.filter(o=>o.OrderStatus!=='Canceled').length;
+    const itemsCount = Object.keys(orderItemsMap).length;
     updateStatus('live',
-      `✓ ${allOrders.length} pedidos · ${Object.keys(asinMap).length} ASINs · ${STATE.refundEvents.length} reembolsos`,
-      `Última act.: ${new Date().toLocaleTimeString('es-ES')} · ${itemsLoaded}/${validOrders.length} pedidos con items`
+      `✓ ${STATE.orders.length} pedidos · ${Object.keys(asinMap).length} ASINs · ${STATE.refundEvents.length} reembolsos`,
+      `Última act.: ${new Date().toLocaleTimeString('es-ES')} · ${itemsCount} pedidos con items · Datos desde Supabase`
     );
     setConn('live');
     document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('es-ES');
