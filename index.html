@@ -456,13 +456,8 @@ async function proxyCall(action, extraParams={}) {
   // Solo añadir fechas si NO es una llamada con nextToken (paginación)
   if(!extraParams.nextToken) {
     url.searchParams.set('dateFrom', STATE.dateFrom+'T00:00:00Z');
-    const todayStr=new Date().toISOString().slice(0,10);
-    let dateToISO;
-    if(STATE.dateTo>=todayStr){
-      dateToISO=new Date(Date.now()-10*60*1000).toISOString();
-    } else {
-      dateToISO=STATE.dateTo+'T23:59:59Z';
-    }
+    // dateTo siempre 15 minutos antes del momento actual para evitar errores de Amazon
+    const dateToISO = new Date(Date.now()-15*60*1000).toISOString();
     url.searchParams.set('dateTo', dateToISO);
   }
   Object.entries(extraParams).forEach(([k,v])=>url.searchParams.set(k,v));
@@ -535,7 +530,7 @@ async function loadAllData() {
       setLoadingText(`Completando items faltantes...`,`${missingItems.length} pedidos sin items`);
       let extraCache={};
       try{ extraCache=JSON.parse(localStorage.getItem('amazon_items_cache_v7')||'{}'); }catch(e){}
-      for(let i=0;i<missingItems.length;i+=batchSize){
+      for(let i=0;i<missingItems.length;i+=5){
         const batch=missingItems.slice(i,i+batchSize);
         const results=await Promise.all(batch.map(o=>
           proxyCall('orderItems',{orderId:o.AmazonOrderId})
