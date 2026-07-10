@@ -2,6 +2,13 @@
  * sync-amazon.js
  * Sincronización incremental Amazon SP-API → Supabase
  * Se ejecuta via GitHub Actions (cron nocturno o manual)
+ *
+ * CAMBIO CLAVE (fix precios a 0):
+ *   Antes se pedían pedidos por CreatedAfter (fecha de creación) → un pedido que
+ *   entra en Pending nunca se volvía a leer al confirmarse, y su precio se quedaba a 0.
+ *   Ahora se piden por LastUpdatedAfter (fecha de última modificación) → cuando un pedido
+ *   pasa de Pending a Shipped/Unshipped, vuelve a entrar en la sincronización y se
+ *   reescribe con su precio real.
  */
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
@@ -80,26 +87,33 @@ async function main() {
   const lastSync = syncLogs?.[0];
   const rawDate = lastSync?.last_order_date || '2026-01-01T00:00:00Z';
   // Normalizar a formato Z (Amazon requiere ISO8601 con Z, no +00:00)
-  const lastOrderDate = new Date(rawDate).toISOString();
+  const watermark = new Date(rawDate).toISOString();
+
+  // Ventana por FECHA DE ÚLTIMA MODIFICACIÓN (no de creación).
+  // Solapamiento de seguridad de 10 min para no perder cambios justo en el borde;
+  // el guardado es idempotente (merge-duplicates), así que repetir no molesta.
+  const lastUpdatedAfter = new Date(new Date(watermark).getTime() - 10 * 60 * 1000).toISOString();
+
   console.log(`Última sincronización: ${lastSync?.last_sync}`);
-  console.log(`Cargando pedidos desde: ${lastOrderDate}`);
+  console.log(`Marca guardada: ${watermark}`);
+  console.log(`Trayendo pedidos modificados desde: ${lastUpdatedAfter}`);
 
   // 2. Auth Amazon
   const token = await getAccessToken();
   console.log('✓ Token Amazon obtenido');
 
-  // 3. Cargar pedidos nuevos paginando
+  // 3. Cargar pedidos modificados paginando
   let allOrders = [];
   let nextToken = null;
   let page = 0;
   const dateTo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-  // Para reembolsos usar siempre desde inicio del año en primera sync
-  const finDateFrom = lastSync?.orders_synced === 0 ? '2026-01-01T00:00:00Z' : lastOrderDate;
+  // Esta será la nueva marca al terminar: el límite superior de la ventana.
+  const newWatermark = dateTo;
 
   do {
     const url = nextToken
       ? `/orders/v0/orders?NextToken=${encodeURIComponent(nextToken)}`
-      : `/orders/v0/orders?MarketplaceIds=${MARKETPLACE}&CreatedAfter=${encodeURIComponent(lastOrderDate)}&CreatedBefore=${encodeURIComponent(dateTo)}&OrderStatuses=Shipped,Unshipped,PartiallyShipped,Pending,Canceled,Unfulfillable,InvoiceUnconfirmed,PendingAvailability`;
+      : `/orders/v0/orders?MarketplaceIds=${MARKETPLACE}&LastUpdatedAfter=${encodeURIComponent(lastUpdatedAfter)}&LastUpdatedBefore=${encodeURIComponent(dateTo)}&OrderStatuses=Shipped,Unshipped,PartiallyShipped,Pending,Canceled,Unfulfillable,InvoiceUnconfirmed,PendingAvailability`;
 
     const data = await spApi(url, token);
     if (data.errors) { console.error('Error pedidos:', data.errors); break; }
@@ -113,18 +127,18 @@ async function main() {
     if (nextToken) await sleep(600);
   } while (nextToken && page < 100);
 
-  console.log(`✓ ${allOrders.length} pedidos nuevos encontrados`);
+  console.log(`✓ ${allOrders.length} pedidos nuevos/modificados encontrados`);
 
   if (allOrders.length === 0) {
-    console.log('No hay pedidos nuevos. Sincronización completada.');
+    console.log('No hay pedidos modificados. Sincronización completada.');
     await supabase('POST', 'sync_log', {
       marketplace: 'ES', last_sync: new Date().toISOString(),
-      last_order_date: lastOrderDate, orders_synced: 0, status: 'ok', notes: 'Sin pedidos nuevos'
+      last_order_date: newWatermark, orders_synced: 0, status: 'ok', notes: 'Sin cambios'
     });
     return;
   }
 
-  // 4. Guardar pedidos en Supabase
+  // 4. Guardar pedidos en Supabase (upsert: actualiza estado y total al reprocesar)
   console.log('Guardando pedidos en Supabase...');
   const ordersToInsert = allOrders.map(o => ({
     id: o.AmazonOrderId,
@@ -148,6 +162,8 @@ async function main() {
   console.log('✓ Pedidos guardados');
 
   // 5. Cargar y guardar items de cada pedido
+  //    Al reprocesar un pedido que ya estaba en Pending, se borran sus items antiguos
+  //    (precio 0) y se reinsertan con el ItemPrice real ahora que está confirmado.
   const validOrders = allOrders.filter(o => o.OrderStatus !== 'Canceled');
   console.log(`Cargando items de ${validOrders.length} pedidos válidos...`);
 
@@ -224,7 +240,7 @@ async function main() {
   console.log('Cargando eventos financieros (paginación completa)...');
   // Usar siempre desde inicio del año para capturar todos los datos
   const finDateFromFull = '2026-01-01T00:00:00Z';
-  
+
   let allShipmentEvents = [];
   let allRefundEvents = [];
   let allAdEvents = [];
@@ -313,7 +329,7 @@ async function main() {
   console.log('Procesando gastos adicionales...');
   try {
     const finEvents = { ProductAdsPaymentEventList: allAdEvents, ServiceFeeEventList: allServiceFees, AdjustmentEventList: allAdjustments, SAFETReimbursementEventList: allSafetEvents };
-    const periodMonth = new Date(lastOrderDate).toISOString().slice(0, 7); // YYYY-MM
+    const periodMonth = new Date(watermark).toISOString().slice(0, 7); // YYYY-MM
 
     // Publicidad
     const adEvents = finEvents.ProductAdsPaymentEventList || [];
@@ -423,12 +439,13 @@ async function main() {
     console.error('Error procesando gastos adicionales:', e.message);
   }
 
-  // 7. Actualizar log de sincronización
-  const maxDate = allOrders.reduce((max, o) => o.PurchaseDate > max ? o.PurchaseDate : max, lastOrderDate);
+  // 7. Actualizar log de sincronización.
+  //    La nueva marca es el límite superior de la ventana (patrón LastUpdatedAfter),
+  //    no la fecha de compra máxima, para que la siguiente ejecución continúe sin huecos.
   await supabase('POST', 'sync_log', [{
     marketplace: 'ES',
     last_sync: new Date().toISOString(),
-    last_order_date: maxDate,
+    last_order_date: newWatermark,
     orders_synced: allOrders.length,
     status: 'ok',
     notes: `${allOrders.length} pedidos · ${itemsProcessed} con items · ${feesProcessed} con fees`
@@ -439,7 +456,7 @@ async function main() {
   console.log(`   Pedidos: ${allOrders.length}`);
   console.log(`   Items: ${itemsProcessed}`);
   console.log(`   Fees: ${feesProcessed}`);
-  console.log(`   Próxima desde: ${maxDate}`);
+  console.log(`   Próxima ventana desde: ${newWatermark}`);
 }
 
 main().catch(err => {
