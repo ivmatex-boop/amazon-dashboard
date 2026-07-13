@@ -149,6 +149,10 @@ async function main() {
     amount: parseFloat(o.OrderTotal?.Amount || 0),
     currency: o.OrderTotal?.CurrencyCode || 'EUR',
     num_items_shipped: o.NumberOfItemsShipped || 0,
+    ship_city:        o.ShippingAddress?.City || null,
+    ship_postal_code: o.ShippingAddress?.PostalCode || null,
+    ship_state:       o.ShippingAddress?.StateOrRegion || null,
+    ship_country:     o.ShippingAddress?.CountryCode || null,
     raw: o,
     updated_at: new Date().toISOString()
   }));
