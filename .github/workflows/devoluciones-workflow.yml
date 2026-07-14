@@ -1,0 +1,41 @@
+name: Devoluciones Amazon → Supabase
+
+on:
+  # Nocturno: 4:30 AM España (1h y media después del sync de ventas, para no solaparse)
+  schedule:
+    - cron: '30 2 * * *'
+  # Manual, con opción de traer histórico
+  workflow_dispatch:
+    inputs:
+      desde:
+        description: 'Traer histórico desde esta fecha (AAAA-MM-DD). Vacío = últimos 55 días.'
+        required: false
+        default: ''
+
+jobs:
+  sync-devoluciones:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90        # los informes de Amazon tardan minutos en generarse
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Preparar Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Sincronizar devoluciones
+        env:
+          SUPABASE_URL:          ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SECRET:       ${{ secrets.SUPABASE_SECRET }}
+          AMAZON_CLIENT_ID:      ${{ secrets.AMAZON_CLIENT_ID }}
+          AMAZON_CLIENT_SECRET:  ${{ secrets.AMAZON_CLIENT_SECRET }}
+          AMAZON_REFRESH_TOKEN:  ${{ secrets.AMAZON_REFRESH_TOKEN }}
+        run: |
+          if [ -n "${{ github.event.inputs.desde }}" ]; then
+            node sync-devoluciones.js --desde=${{ github.event.inputs.desde }}
+          else
+            node sync-devoluciones.js
+          fi
