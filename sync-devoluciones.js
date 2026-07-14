@@ -333,21 +333,38 @@ function relatedId(list, name) {
 
 async function syncTransactions(token, fromISO, toISO) {
   console.log('\n💳 TRANSACCIONES (incluye DIFERIDAS)');
-  let all = [], next = null, page = 0;
 
-  do {
-    const qs = next
-      ? `?nextToken=${encodeURIComponent(next)}`
-      : `?postedAfter=${encodeURIComponent(fromISO)}&postedBefore=${encodeURIComponent(toISO)}&marketplaceId=${MARKETPLACE}`;
-    const resp = await spApi(`/finances/2024-06-19/transactions${qs}`, token);
-    const payload = resp.payload || resp;
-    const batch = payload.transactions || [];
-    all = all.concat(batch);
-    next = payload.nextToken || null;
-    page++;
-    if (page % 5 === 0 || !next) console.log(`  página ${page}: ${all.length} transacciones`);
-    if (next) await sleep(2200);          // rate limit: 0,5 req/s
-  } while (next && page < 200);
+  // La API admite un máximo de 180 días por petición → trocear
+  const txWindows = [];
+  let cur = new Date(fromISO);
+  const end = new Date(toISO);
+  while (cur < end) {
+    const wEnd = new Date(Math.min(cur.getTime() + 170 * 86400000, end.getTime()));
+    txWindows.push({ start: cur.toISOString(), end: wEnd.toISOString() });
+    cur = new Date(wEnd.getTime() + 1000);
+  }
+  console.log(`  ${txWindows.length} ventana(s) de máx. 180 días`);
+
+  let all = [];
+  for (const w of txWindows) {
+    console.log(`  → ${w.start.slice(0, 10)} → ${w.end.slice(0, 10)}`);
+    let next = null, page = 0;
+    do {
+      const qs = next
+        ? `?nextToken=${encodeURIComponent(next)}`
+        : `?postedAfter=${encodeURIComponent(w.start)}&postedBefore=${encodeURIComponent(w.end)}&marketplaceId=${MARKETPLACE}`;
+      const resp = await spApi(`/finances/2024-06-19/transactions${qs}`, token);
+      const payload = resp.payload || resp;
+      const batch = payload.transactions || [];
+      all = all.concat(batch);
+      next = payload.nextToken || null;
+      page++;
+      if (page % 10 === 0) console.log(`     página ${page}: ${all.length} acumuladas`);
+      if (next) await sleep(2200);        // rate limit: 0,5 req/s
+    } while (next && page < 300);
+    console.log(`     ✓ ${all.length} acumuladas`);
+    await sleep(2200);
+  }
 
   console.log(`  ${all.length} transacciones descargadas`);
   if (!all.length) return 0;
@@ -360,6 +377,13 @@ async function syncTransactions(token, fromISO, toISO) {
   });
   console.log('  tipos:  ', JSON.stringify(tipos));
   console.log('  estados:', JSON.stringify(estados));
+  // muestra el desglose de una transacción de reembolso, para verificar nombres
+  const ej = all.find(t => /refund/i.test(t.transactionType || ''));
+  if (ej) {
+    const bd = flattenBreakdowns(ej.breakdowns);
+    (ej.items || []).forEach(it => flattenBreakdowns(it.breakdowns, bd));
+    console.log('  ejemplo REEMBOLSO, desglose:', JSON.stringify(bd));
+  }
 
   const rows = all.map(t => {
     // el desglose puede venir a nivel de transacción y/o de item
