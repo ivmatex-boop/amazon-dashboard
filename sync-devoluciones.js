@@ -304,79 +304,96 @@ async function syncReimbursements(token, windows) {
 }
 
 // ============================================================
-// 4. REEMBOLSOS DETALLADOS (Finances API)
-//    Amplía lo que ya había: además del principal, guarda la comisión
-//    que Amazon devuelve y la tarifa de gestión que se queda.
-//    Hace UPSERT (no borra la tabla) → deja de perderse el mes en curso.
+// 4. TRANSACCIONES (Finances API v2024-06-19 · listTransactions)
+//
+//    La API antigua (/finances/v0/financialEvents) SOLO devuelve
+//    transacciones LIBERADAS. Las DIFERIDAS (que Amazon retiene ~7 días
+//    tras la entrega) no aparecen → por eso los reembolsos recientes
+//    quedaban sin comisión devuelta.
+//
+//    listTransactions es el equivalente a la vista "Transacciones" de
+//    Seller Central e incluye DEFERRED, RELEASED y DEFERRED_RELEASED.
 // ============================================================
-async function syncRefundsDetailed(token, fromISO, toISO) {
-  console.log('\n🔄 REEMBOLSOS DETALLADOS (finanzas)');
-  let events = [], next = null, page = 0;
+
+// Aplana el árbol de breakdowns en un mapa {tipo: importe}
+function flattenBreakdowns(list, out = {}) {
+  (list || []).forEach(b => {
+    const type = b.breakdownType || 'Unknown';
+    const amt = parseFloat(b.breakdownAmount?.currencyAmount ?? 0) || 0;
+    out[type] = (out[type] || 0) + amt;
+    if (b.breakdowns && b.breakdowns.length) flattenBreakdowns(b.breakdowns, out);
+  });
+  return out;
+}
+
+function relatedId(list, name) {
+  const f = (list || []).find(x => x.relatedIdentifierName === name);
+  return f ? f.relatedIdentifierValue : null;
+}
+
+async function syncTransactions(token, fromISO, toISO) {
+  console.log('\n💳 TRANSACCIONES (incluye DIFERIDAS)');
+  let all = [], next = null, page = 0;
 
   do {
-    const url = next
-      ? `/finances/v0/financialEvents?NextToken=${encodeURIComponent(next)}`
-      : `/finances/v0/financialEvents?PostedAfter=${encodeURIComponent(fromISO)}&PostedBefore=${encodeURIComponent(toISO)}`;
-    const resp = await spApi(url, token);
-    const ev = resp.payload?.FinancialEvents || {};
-    events = events.concat(ev.RefundEventList || []);
-    next = resp.payload?.NextToken || null;
+    const qs = next
+      ? `?nextToken=${encodeURIComponent(next)}`
+      : `?postedAfter=${encodeURIComponent(fromISO)}&postedBefore=${encodeURIComponent(toISO)}&marketplaceId=${MARKETPLACE}`;
+    const resp = await spApi(`/finances/2024-06-19/transactions${qs}`, token);
+    const payload = resp.payload || resp;
+    const batch = payload.transactions || [];
+    all = all.concat(batch);
+    next = payload.nextToken || null;
     page++;
-    if (page % 5 === 0) console.log(`     página ${page}: ${events.length} reembolsos`);
-    if (next) await sleep(600);
-  } while (next && page < 80);
+    if (page % 5 === 0 || !next) console.log(`  página ${page}: ${all.length} transacciones`);
+    if (next) await sleep(2200);          // rate limit: 0,5 req/s
+  } while (next && page < 200);
 
-  console.log(`  ${events.length} eventos de reembolso`);
+  console.log(`  ${all.length} transacciones descargadas`);
+  if (!all.length) return 0;
 
-  const rows = [];
-  events.forEach(ev => {
-    const orderId = ev.AmazonOrderId || null;
-    const posted = ev.PostedDate || new Date().toISOString();
+  // Diagnóstico: qué tipos y estados hay
+  const tipos = {}, estados = {};
+  all.forEach(t => {
+    tipos[t.transactionType] = (tipos[t.transactionType] || 0) + 1;
+    estados[t.transactionStatus] = (estados[t.transactionStatus] || 0) + 1;
+  });
+  console.log('  tipos:  ', JSON.stringify(tipos));
+  console.log('  estados:', JSON.stringify(estados));
 
-    (ev.ShipmentItemAdjustmentList || []).forEach(item => {
-      let principal = 0, shipping = 0, tax = 0;
-      let commissionBack = 0, adminFee = 0, otherFees = 0;
+  const rows = all.map(t => {
+    // el desglose puede venir a nivel de transacción y/o de item
+    const bd = flattenBreakdowns(t.breakdowns);
+    (t.items || []).forEach(it => flattenBreakdowns(it.breakdowns, bd));
 
-      // Cargos devueltos al cliente (negativos en la API → los pasamos a positivo)
-      (item.ItemChargeAdjustmentList || []).forEach(c => {
-        const amt = Math.abs(parseFloat(c.ChargeAmount?.CurrencyAmount ?? c.ChargeAmount?.Amount ?? 0));
-        if (c.ChargeType === 'Principal') principal += amt;
-        else if (c.ChargeType === 'ShippingCharge') shipping += amt;
-        else if (String(c.ChargeType).includes('Tax')) tax += amt;
-      });
+    const orderId = relatedId(t.relatedIdentifiers, 'ORDER_ID')
+      || (t.items || []).map(i => relatedId(i.relatedIdentifiers, 'ORDER_ID')).find(Boolean)
+      || null;
 
-      // Ajustes de tarifas: positivo = Amazon te devuelve; negativo = te cobra
-      (item.ItemFeeAdjustmentList || []).forEach(f => {
-        const raw = parseFloat(f.FeeAmount?.CurrencyAmount ?? f.FeeAmount?.Amount ?? 0);
-        const type = String(f.FeeType || '');
-        if (type === 'Commission') commissionBack += Math.abs(raw);          // comisión devuelta (a tu favor)
-        else if (type === 'RefundCommission') adminFee += Math.abs(raw);     // tarifa de gestión (Amazon se la queda)
-        else otherFees += Math.abs(raw);
-      });
+    const g = (...names) => names.reduce((s, n) => s + (bd[n] || 0), 0);
 
-      const asin = item.SellerSKU || '';
-      rows.push({
-        uid: hash(`${orderId}|${item.SellerSKU}|${posted}|${principal}`),
-        order_id: orderId,
-        sku: item.SellerSKU || null,
-        quantity: parseInt(item.QuantityShipped ?? 0, 10) || 0,
-        amount: principal,
-        commission_back: commissionBack,
-        refund_admin_fee: adminFee,
-        shipping_refunded: shipping,
-        tax_refunded: tax,
-        other_fees: otherFees,
-        currency: 'EUR',
-        posted_date: posted,
-        raw: item,
-      });
-    });
+    return {
+      id: t.transactionId || hash(`${orderId}|${t.transactionType}|${t.postedDate}|${t.totalAmount?.currencyAmount}`),
+      posted_date: dat(t.postedDate),
+      transaction_type: t.transactionType || null,
+      transaction_status: t.transactionStatus || null,     // DEFERRED / RELEASED / DEFERRED_RELEASED
+      order_id: orderId,
+      description: t.description || null,
+      total_amount:      parseFloat(t.totalAmount?.currencyAmount ?? 0) || 0,
+      product_charges:   g('ProductCharges', 'Product charges', 'Principal'),
+      promo_rebates:     g('PromotionalRebates', 'Promotional rebates'),
+      amazon_fees:       g('AmazonFees', 'Amazon fees'),
+      other_adjustments: g('Other', 'OtherAdjustments', 'Other adjustments'),
+      shipping_charges:  g('ShippingCharges', 'Shipping charges'),
+      breakdowns: bd,
+      raw: t,
+      updated_at: new Date().toISOString(),
+    };
   });
 
-  const valid = rows.filter(r => r.amount > 0 || r.commission_back > 0);
-  console.log(`  ${valid.length} líneas de reembolso`);
-  if (valid.length) await upsertBatched('refunds', valid);
-  return valid.length;
+  await upsertBatched('transactions', rows);
+  console.log(`✓ ${rows.length} transacciones guardadas`);
+  return rows.length;
 }
 
 // ============================================================
@@ -416,7 +433,7 @@ async function main() {
   const token = await getAccessToken();
   console.log('✓ Token Amazon obtenido');
 
-  const res = { fbm: 0, fba: 0, reimb: 0, refunds: 0 };
+  const res = { fbm: 0, fba: 0, reimb: 0, tx: 0 };
 
   try { res.fbm = await syncReturnsFbm(token, windows); }
   catch (e) { console.error('✗ Error FBM:', e.message); }
@@ -427,22 +444,22 @@ async function main() {
   try { res.reimb = await syncReimbursements(token, windows); }
   catch (e) { console.error('✗ Error indemnizaciones:', e.message); }
 
-  try { res.refunds = await syncRefundsDetailed(token, inicio.toISOString(), hasta.toISOString()); }
-  catch (e) { console.error('✗ Error reembolsos:', e.message); }
+  try { res.tx = await syncTransactions(token, inicio.toISOString(), hasta.toISOString()); }
+  catch (e) { console.error('✗ Error transacciones:', e.message); }
 
   await supabase('POST', 'returns_sync_log', [{
     last_sync: new Date().toISOString(),
     report_type: 'ALL',
-    rows_synced: res.fbm + res.fba + res.reimb + res.refunds,
+    rows_synced: res.fbm + res.fba + res.reimb + res.tx,
     status: 'ok',
-    notes: `FBM:${res.fbm} FBA:${res.fba} Indem:${res.reimb} Reembolsos:${res.refunds}`,
+    notes: `FBM:${res.fbm} FBA:${res.fba} Indem:${res.reimb} Transacciones:${res.tx}`,
   }], '', 'return=minimal').catch(e => console.log('log warning:', e.message));
 
   console.log('\n✅ Completado');
   console.log(`   Devoluciones FBM:  ${res.fbm}`);
   console.log(`   Devoluciones FBA:  ${res.fba}`);
   console.log(`   Indemnizaciones:   ${res.reimb}`);
-  console.log(`   Reembolsos:        ${res.refunds}`);
+  console.log(`   Transacciones:     ${res.tx}`);
 }
 
 main().catch(err => { console.error('❌ Error fatal:', err); process.exit(1); });
