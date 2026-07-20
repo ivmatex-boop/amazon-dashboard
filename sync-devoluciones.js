@@ -386,9 +386,14 @@ async function syncTransactions(token, fromISO, toISO) {
   }
 
   const rows = all.map(t => {
-    // el desglose puede venir a nivel de transacción y/o de item
-    const bd = flattenBreakdowns(t.breakdowns);
-    (t.items || []).forEach(it => flattenBreakdowns(it.breakdowns, bd));
+    // El desglose viene anidado: a nivel de transacción Y a nivel de línea,
+    // con los MISMOS conceptos. Si se aplanan los dos, todo sale DOBLADO.
+    // flattenBreakdowns ya recorre los hijos, así que solo se aplana un nivel:
+    // el de transacción si existe, y si no, el de las líneas.
+    let bd = flattenBreakdowns(t.breakdowns);
+    if (Object.keys(bd).length === 0) {
+      (t.items || []).forEach(it => flattenBreakdowns(it.breakdowns, bd));
+    }
 
     const orderId = relatedId(t.relatedIdentifiers, 'ORDER_ID')
       || (t.items || []).map(i => relatedId(i.relatedIdentifiers, 'ORDER_ID')).find(Boolean)
