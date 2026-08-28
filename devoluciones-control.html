@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Control de Devoluciones — Comfort Sleep</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
   :root {
     --bg: #0f1420;
@@ -58,6 +59,17 @@
     min-width: 260px;
   }
   .search-box::placeholder { color: var(--text-dim); }
+
+  .export-btn {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .export-btn:hover { border-color: var(--accent); }
 
   .filters { display: flex; gap: 8px; flex-wrap: wrap; }
   .filters button {
@@ -158,6 +170,17 @@
     width: 360px;
   }
   .modal h3 { margin: 0 0 12px 0; font-size: 15px; }
+  .modal label { display: block; font-size: 12px; color: var(--text-dim); margin: 10px 0 4px 0; }
+  .modal select {
+    width: 100%;
+    background: #0f1420;
+    border: 1px solid var(--panel-border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px;
+    font-family: inherit;
+    font-size: 13px;
+  }
   .modal textarea {
     width: 100%;
     min-height: 80px;
@@ -211,6 +234,7 @@
 
 <div class="toolbar">
   <input type="text" id="search" class="search-box" placeholder="Buscar por nº de pedido...">
+  <button id="export-btn" class="export-btn">⬇ Descargar Excel</button>
 </div>
 
 <div class="filters" id="filters">
@@ -231,7 +255,15 @@
 <div class="modal-backdrop" id="modal-backdrop">
   <div class="modal">
     <h3 id="modal-title">Marcar caso</h3>
-    <textarea id="modal-notes" placeholder="Nota (opcional): qué hiciste, qué encontraste..."></textarea>
+    <label for="modal-handler">¿Quién lo gestiona?</label>
+    <select id="modal-handler">
+      <option value="">Selecciona...</option>
+      <option value="Iván">Iván</option>
+      <option value="Petro">Petro</option>
+      <option value="Luis">Luis</option>
+    </select>
+    <label for="modal-notes">Nota (opcional)</label>
+    <textarea id="modal-notes" placeholder="Qué hiciste, qué encontraste..."></textarea>
     <div class="modal-buttons">
       <button id="modal-cancel">Cancelar</button>
       <button id="modal-confirm" class="primary">Confirmar</button>
@@ -316,7 +348,7 @@
         if (sa !== sb_) return (sa - sb_) * (sortDir === 'asc' ? -1 : 1); // rojo siempre primero salvo que inviertas
         return (Number(b.amount_at_risk) || 0) - (Number(a.amount_at_risk) || 0);
       }
-      if (sortKey === 'order_date' || sortKey === 'request_date') {
+      if (sortKey === 'order_date' || sortKey === 'request_date' || sortKey === 'return_delivery_date') {
         const da = a[sortKey] ? new Date(a[sortKey]).getTime() : 0;
         const db = b[sortKey] ? new Date(b[sortKey]).getTime() : 0;
         return (da - db) * dir;
@@ -367,6 +399,7 @@
           <th>Pedido / Producto</th>
           <th class="sortable" data-sort="order_date">Fecha pedido <span class="arrow">${arrowFor('order_date')}</span></th>
           <th class="sortable" data-sort="request_date">Fecha solicitud <span class="arrow">${arrowFor('request_date')}</span></th>
+          <th class="sortable" data-sort="return_delivery_date">Fecha recepción <span class="arrow">${arrowFor('return_delivery_date')}</span></th>
           <th>Reembolso</th>
           <th class="sortable" data-sort="amount_at_risk">Importe <span class="arrow">${arrowFor('amount_at_risk')}</span></th>
           <th class="sortable" data-sort="days_elapsed">Días <span class="arrow">${arrowFor('days_elapsed')}</span></th>
@@ -389,10 +422,15 @@
         </td>
         <td>${fmtDate(r.order_date)}</td>
         <td>${fmtDate(r.request_date)}</td>
+        <td>${fmtDate(r.return_delivery_date)}</td>
         <td><span class="pill ${r.refund_applied ? 'yes' : 'no'}">${r.refund_applied ? 'Sí' : 'No'}</span></td>
         <td class="amount">${r.amount_at_risk != null ? fmtEUR(r.amount_at_risk) : '—'}</td>
         <td>${r.days_elapsed ?? '—'}</td>
-        <td><span class="case-tag ${r.case_status}">${caseLabel(r.case_status)}</span></td>
+        <td>
+          <span class="case-tag ${r.case_status}">${caseLabel(r.case_status)}</span>
+          ${r.handled_by ? `<div class="reason">por ${r.handled_by}</div>` : ''}
+          ${r.case_notes ? `<div class="reason">"${r.case_notes}"</div>` : ''}
+        </td>
         <td>
           <div class="actions">
             <button class="resolve" data-order="${r.order_id}" data-type="${r.return_type}" data-status="resolved">✓ Gestionado</button>
@@ -426,6 +464,7 @@
     document.getElementById('modal-title').textContent =
       case_status === 'resolved' ? 'Marcar como gestionado' : 'Descartar caso (no era pérdida)';
     document.getElementById('modal-notes').value = '';
+    document.getElementById('modal-handler').value = '';
     document.getElementById('modal-backdrop').classList.add('open');
   }
 
@@ -437,12 +476,18 @@
   document.getElementById('modal-cancel').addEventListener('click', closeModal);
   document.getElementById('modal-confirm').addEventListener('click', async () => {
     if (!pendingAction) return;
+    const handledBy = document.getElementById('modal-handler').value;
+    if (!handledBy) {
+      alert('Selecciona quién lo gestiona antes de confirmar.');
+      return;
+    }
     const notes = document.getElementById('modal-notes').value;
     const { error } = await sb.from('return_case_actions').upsert({
       order_id: pendingAction.order_id,
       return_type: pendingAction.return_type,
       case_status: pendingAction.case_status,
       notes: notes || null,
+      handled_by: handledBy,
       updated_at: new Date().toISOString()
     }, { onConflict: 'order_id,return_type' });
     if (error) {
@@ -452,6 +497,32 @@
     closeModal();
     load();
   });
+
+  function exportExcel() {
+    const list = sortRows(applyFilterAndSearch());
+    const data = list.map(r => ({
+      'Estado': labelFor(r.alert_level),
+      'Canal': r.return_type === 'fba_sin_devolucion' ? 'FBA*' : r.return_type.toUpperCase(),
+      'Pedido': r.order_id,
+      'Producto': r.product_name || r.sku || '',
+      'Fecha pedido': fmtDate(r.order_date),
+      'Fecha solicitud': fmtDate(r.request_date),
+      'Fecha recepción': fmtDate(r.return_delivery_date),
+      'Reembolso': r.refund_applied ? 'Sí' : 'No',
+      'Importe': r.amount_at_risk != null ? Number(r.amount_at_risk) : '',
+      'Días': r.days_elapsed ?? '',
+      'Motivo': r.alert_reason || '',
+      'Gestión': caseLabel(r.case_status),
+      'Gestionado por': r.handled_by || '',
+      'Nota': r.case_notes || ''
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Devoluciones');
+    XLSX.writeFile(wb, 'devoluciones_comfort_sleep_' + new Date().toISOString().slice(0,10) + '.xlsx');
+  }
+
+  document.getElementById('export-btn').addEventListener('click', exportExcel);
 
   document.getElementById('filters').addEventListener('click', (e) => {
     if (e.target.tagName !== 'BUTTON') return;
