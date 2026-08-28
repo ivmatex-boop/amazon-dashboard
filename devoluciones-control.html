@@ -20,8 +20,9 @@
     --yellow-bg: #35300f;
     --gray: #6b7280;
     --gray-bg: #23262d;
-    --accent: #3b82f6;
     --green: #22c55e;
+    --green-bg: #123a1f;
+    --accent: #3b82f6;
   }
   * { box-sizing: border-box; }
   body {
@@ -34,19 +35,31 @@
   h1 { font-size: 20px; margin: 0 0 4px 0; }
   .subtitle { color: var(--text-dim); font-size: 13px; margin-bottom: 24px; }
 
-  .kpis { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  .kpis { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
   .kpi {
     background: var(--panel);
     border: 1px solid var(--panel-border);
     border-radius: 10px;
     padding: 16px 20px;
-    min-width: 160px;
+    min-width: 150px;
   }
   .kpi .label { font-size: 12px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
   .kpi .value { font-size: 26px; font-weight: 700; margin-top: 4px; }
   .kpi.risk .value { color: var(--red); }
 
-  .filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .toolbar { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  .search-box {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-size: 13px;
+    min-width: 260px;
+  }
+  .search-box::placeholder { color: var(--text-dim); }
+
+  .filters { display: flex; gap: 8px; flex-wrap: wrap; }
   .filters button {
     background: var(--panel);
     border: 1px solid var(--panel-border);
@@ -58,6 +71,8 @@
   }
   .filters button.active { background: var(--accent); border-color: var(--accent); color: white; }
 
+  .result-count { color: var(--text-dim); font-size: 12px; margin-bottom: 10px; }
+
   table { width: 100%; border-collapse: collapse; background: var(--panel); border-radius: 10px; overflow: hidden; }
   thead th {
     text-align: left;
@@ -67,7 +82,11 @@
     color: var(--text-dim);
     padding: 10px 12px;
     border-bottom: 1px solid var(--panel-border);
+    white-space: nowrap;
   }
+  thead th.sortable { cursor: pointer; user-select: none; }
+  thead th.sortable:hover { color: var(--text); }
+  thead th .arrow { font-size: 10px; margin-left: 3px; opacity: .6; }
   tbody td {
     padding: 12px;
     border-bottom: 1px solid var(--panel-border);
@@ -83,15 +102,27 @@
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
+    white-space: nowrap;
   }
   .badge.red { background: var(--red-bg); color: var(--red); }
   .badge.orange { background: var(--orange-bg); color: var(--orange); }
   .badge.yellow { background: var(--yellow-bg); color: var(--yellow); }
   .badge.gray { background: var(--gray-bg); color: var(--gray); }
+  .badge.none { background: var(--green-bg); color: var(--green); }
+
+  .pill { font-size: 11px; padding: 1px 7px; border-radius: 6px; }
+  .pill.yes { background: var(--green-bg); color: var(--green); }
+  .pill.no { background: var(--gray-bg); color: var(--text-dim); }
+
+  .case-tag { font-size: 11px; color: var(--text-dim); }
+  .case-tag.resolved { color: var(--green); }
+  .case-tag.dismissed { color: var(--gray); }
+  .case-tag.claim_filed { color: var(--accent); }
 
   .amount { font-weight: 700; }
-  .reason { color: var(--text-dim); font-size: 12px; margin-top: 2px; }
+  .reason { color: var(--text-dim); font-size: 12px; margin-top: 2px; max-width: 260px; }
   .order-id { font-family: monospace; font-size: 12px; }
+  .muted { color: var(--text-dim); }
 
   .actions { display: flex; gap: 6px; flex-wrap: wrap; }
   .actions button {
@@ -155,7 +186,7 @@
 <body>
 
 <h1>Control de Devoluciones — Comfort Sleep</h1>
-<div class="subtitle">Solo se muestran los casos sospechosos (reembolsado sin confirmar recepción, plazo de auto-reembolso a punto de saltar, o devuelto dañado sin compensar). Actualizado en directo desde Supabase.</div>
+<div class="subtitle">Todas las devoluciones FBA y FBM. Las sospechosas quedan resaltadas en color; el resto aparece sin incidencia. Actualizado en directo desde Supabase.</div>
 
 <div id="error" class="error" style="display:none;"></div>
 
@@ -165,13 +196,21 @@
     <div class="value" id="kpi-risk">—</div>
   </div>
   <div class="kpi">
-    <div class="label">Casos abiertos</div>
+    <div class="label">Casos con incidencia</div>
     <div class="value" id="kpi-count">—</div>
   </div>
   <div class="kpi">
     <div class="label">Urgentes (rojo)</div>
     <div class="value" id="kpi-red">—</div>
   </div>
+  <div class="kpi">
+    <div class="label">Total devoluciones</div>
+    <div class="value" id="kpi-total">—</div>
+  </div>
+</div>
+
+<div class="toolbar">
+  <input type="text" id="search" class="search-box" placeholder="Buscar por nº de pedido...">
 </div>
 
 <div class="filters" id="filters">
@@ -180,9 +219,12 @@
   <button data-filter="orange">🟠 Últimos días</button>
   <button data-filter="yellow">🟡 Vigilar</button>
   <button data-filter="gray">⚪ Revisar</button>
+  <button data-filter="none">🟢 Sin incidencia</button>
   <button data-filter="fba">Solo FBA</button>
   <button data-filter="fbm">Solo FBM</button>
 </div>
+
+<div class="result-count" id="result-count"></div>
 
 <div id="content"><div class="loading">Cargando…</div></div>
 
@@ -200,27 +242,37 @@
 <script>
   // ==========================================================
   // CONFIGURA ESTO: copia estos dos valores del HTML del
-  // dashboard de Mima que ya tienes desplegado (busca donde
-  // dice createClient(...) en ese archivo).
+  // dashboard de Mima que ya tienes desplegado.
   // ==========================================================
   const SUPABASE_URL = "https://bhqutqkqvtqebndxrhob.supabase.co";
-const SUPABASE_ANON_KEY = "sb_publishable_TMqI8fBw-M43NDOUaQAIkA_thIn6qRK";
+  const SUPABASE_ANON_KEY = "sb_publishable_TMqI8fBw-M43NDOUaQAIkA_thIn6qRK";
 
   const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
   let rows = [];
   let activeFilter = "all";
-  let pendingAction = null; // { order_id, return_type, case_status }
+  let searchTerm = "";
+  let sortKey = "severity";   // severity | order_date | request_date | days_elapsed | amount_at_risk
+  let sortDir = "desc";
+  let pendingAction = null;
+
+  const SEVERITY_RANK = { red: 0, orange: 1, yellow: 2, gray: 3, none: 4 };
 
   const fmtEUR = (n) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
+  const fmtDate = (d) => {
+    if (!d) return '—';
+    const dt = new Date(d);
+    if (isNaN(dt.getTime())) return '—';
+    return dt.toLocaleDateString('es-ES', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  };
 
   async function load() {
     const errorEl = document.getElementById('error');
     errorEl.style.display = 'none';
-    const { data, error } = await sb.from('v_return_alerts_open').select('*');
+    const { data, error } = await sb.from('v_returns_full_status').select('*');
     if (error) {
       errorEl.style.display = 'block';
-      errorEl.textContent = 'Error cargando datos: ' + error.message + ' (revisa que ejecutaste los SQL de creación de tablas/vistas y que el anon key es correcto)';
+      errorEl.textContent = 'Error cargando datos: ' + error.message + ' (revisa que ejecutaste el SQL actualizado y que el anon key es correcto)';
       document.getElementById('content').innerHTML = '';
       return;
     }
@@ -232,22 +284,77 @@ const SUPABASE_ANON_KEY = "sb_publishable_TMqI8fBw-M43NDOUaQAIkA_thIn6qRK";
   function renderKpis() {
     const risk = rows.filter(r => r.alert_level === 'red' || r.alert_level === 'orange')
                       .reduce((sum, r) => sum + (Number(r.amount_at_risk) || 0), 0);
+    const withIssue = rows.filter(r => r.alert_level !== 'none');
     document.getElementById('kpi-risk').textContent = fmtEUR(risk);
-    document.getElementById('kpi-count').textContent = rows.length;
+    document.getElementById('kpi-count').textContent = withIssue.length;
     document.getElementById('kpi-red').textContent = rows.filter(r => r.alert_level === 'red').length;
+    document.getElementById('kpi-total').textContent = rows.length;
+  }
+
+  function applyFilterAndSearch() {
+    let filtered = rows;
+    if (activeFilter === 'fba') {
+      filtered = filtered.filter(r => r.return_type === 'fba' || r.return_type === 'fba_sin_devolucion');
+    } else if (activeFilter === 'fbm') {
+      filtered = filtered.filter(r => r.return_type === 'fbm');
+    } else if (activeFilter !== 'all') {
+      filtered = filtered.filter(r => r.alert_level === activeFilter);
+    }
+    if (searchTerm.trim()) {
+      const term = searchTerm.trim().toLowerCase();
+      filtered = filtered.filter(r => (r.order_id || '').toLowerCase().includes(term));
+    }
+    return filtered;
+  }
+
+  function sortRows(list) {
+    const dir = sortDir === 'asc' ? 1 : -1;
+    return [...list].sort((a, b) => {
+      if (sortKey === 'severity') {
+        const sa = SEVERITY_RANK[a.alert_level] ?? 9;
+        const sb_ = SEVERITY_RANK[b.alert_level] ?? 9;
+        if (sa !== sb_) return (sa - sb_) * (sortDir === 'asc' ? -1 : 1); // rojo siempre primero salvo que inviertas
+        return (Number(b.amount_at_risk) || 0) - (Number(a.amount_at_risk) || 0);
+      }
+      if (sortKey === 'order_date' || sortKey === 'request_date') {
+        const da = a[sortKey] ? new Date(a[sortKey]).getTime() : 0;
+        const db = b[sortKey] ? new Date(b[sortKey]).getTime() : 0;
+        return (da - db) * dir;
+      }
+      if (sortKey === 'days_elapsed') {
+        return ((a.days_elapsed ?? -1) - (b.days_elapsed ?? -1)) * dir;
+      }
+      if (sortKey === 'amount_at_risk') {
+        return ((Number(a.amount_at_risk) || 0) - (Number(b.amount_at_risk) || 0)) * dir;
+      }
+      return 0;
+    });
+  }
+
+  function setSort(key) {
+    if (sortKey === key) {
+      sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+      sortKey = key;
+      sortDir = key === 'severity' ? 'desc' : 'desc';
+    }
+    render();
+  }
+
+  function arrowFor(key) {
+    if (sortKey !== key) return '';
+    return sortDir === 'asc' ? '▲' : '▼';
   }
 
   function render() {
     const content = document.getElementById('content');
-    let filtered = rows;
-    if (activeFilter === 'fba' || activeFilter === 'fbm') {
-      filtered = rows.filter(r => r.return_type === activeFilter);
-    } else if (activeFilter !== 'all') {
-      filtered = rows.filter(r => r.alert_level === activeFilter);
-    }
+    const filtered = sortRows(applyFilterAndSearch());
+
+    document.getElementById('result-count').textContent =
+      filtered.length + ' de ' + rows.length + ' devoluciones';
 
     if (filtered.length === 0) {
-      content.innerHTML = '<div class="empty">Sin casos abiertos en este filtro. 🎉</div>';
+      content.innerHTML = '<div class="empty">Sin resultados con este filtro/búsqueda.</div>';
       return;
     }
 
@@ -255,11 +362,15 @@ const SUPABASE_ANON_KEY = "sb_publishable_TMqI8fBw-M43NDOUaQAIkA_thIn6qRK";
     table.innerHTML = `
       <thead>
         <tr>
-          <th>Estado</th>
+          <th class="sortable" data-sort="severity">Estado <span class="arrow">${arrowFor('severity')}</span></th>
           <th>Canal</th>
           <th>Pedido / Producto</th>
-          <th>Importe</th>
-          <th>Días</th>
+          <th class="sortable" data-sort="order_date">Fecha pedido <span class="arrow">${arrowFor('order_date')}</span></th>
+          <th class="sortable" data-sort="request_date">Fecha solicitud <span class="arrow">${arrowFor('request_date')}</span></th>
+          <th>Reembolso</th>
+          <th class="sortable" data-sort="amount_at_risk">Importe <span class="arrow">${arrowFor('amount_at_risk')}</span></th>
+          <th class="sortable" data-sort="days_elapsed">Días <span class="arrow">${arrowFor('days_elapsed')}</span></th>
+          <th>Gestión</th>
           <th>Acciones</th>
         </tr>
       </thead>
@@ -270,14 +381,18 @@ const SUPABASE_ANON_KEY = "sb_publishable_TMqI8fBw-M43NDOUaQAIkA_thIn6qRK";
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td><span class="badge ${r.alert_level}">${labelFor(r.alert_level)}</span></td>
-        <td>${r.return_type.toUpperCase()}</td>
+        <td>${r.return_type === 'fba_sin_devolucion' ? 'FBA*' : r.return_type.toUpperCase()}</td>
         <td>
           <div class="order-id">${r.order_id}</div>
           <div>${r.product_name || r.sku || ''}</div>
-          <div class="reason">${r.alert_reason || ''}</div>
+          <div class="reason">${r.alert_level !== 'none' ? (r.alert_reason || '') : ''}</div>
         </td>
+        <td>${fmtDate(r.order_date)}</td>
+        <td>${fmtDate(r.request_date)}</td>
+        <td><span class="pill ${r.refund_applied ? 'yes' : 'no'}">${r.refund_applied ? 'Sí' : 'No'}</span></td>
         <td class="amount">${r.amount_at_risk != null ? fmtEUR(r.amount_at_risk) : '—'}</td>
         <td>${r.days_elapsed ?? '—'}</td>
+        <td><span class="case-tag ${r.case_status}">${caseLabel(r.case_status)}</span></td>
         <td>
           <div class="actions">
             <button class="resolve" data-order="${r.order_id}" data-type="${r.return_type}" data-status="resolved">✓ Gestionado</button>
@@ -290,13 +405,20 @@ const SUPABASE_ANON_KEY = "sb_publishable_TMqI8fBw-M43NDOUaQAIkA_thIn6qRK";
     content.innerHTML = '';
     content.appendChild(table);
 
+    table.querySelectorAll('th.sortable').forEach(th => {
+      th.addEventListener('click', () => setSort(th.dataset.sort));
+    });
     tbody.querySelectorAll('button').forEach(btn => {
       btn.addEventListener('click', () => openModal(btn.dataset.order, btn.dataset.type, btn.dataset.status));
     });
   }
 
   function labelFor(level) {
-    return { red: '🔴 Urgente', orange: '🟠 Últimos días', yellow: '🟡 Vigilar', gray: '⚪ Revisar' }[level] || level;
+    return { red: '🔴 Urgente', orange: '🟠 Últimos días', yellow: '🟡 Vigilar', gray: '⚪ Revisar', none: '🟢 OK' }[level] || level;
+  }
+
+  function caseLabel(status) {
+    return { pending: 'Pendiente', resolved: 'Gestionado', dismissed: 'Descartado', claim_filed: 'Reclamado' }[status] || status;
   }
 
   function openModal(order_id, return_type, case_status) {
@@ -336,6 +458,11 @@ const SUPABASE_ANON_KEY = "sb_publishable_TMqI8fBw-M43NDOUaQAIkA_thIn6qRK";
     document.querySelectorAll('#filters button').forEach(b => b.classList.remove('active'));
     e.target.classList.add('active');
     activeFilter = e.target.dataset.filter;
+    render();
+  });
+
+  document.getElementById('search').addEventListener('input', (e) => {
+    searchTerm = e.target.value;
     render();
   });
 
