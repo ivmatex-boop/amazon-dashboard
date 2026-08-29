@@ -425,7 +425,7 @@
     if (channelFilter === 'fba') {
       filtered = filtered.filter(r => r.return_type === 'fba' || r.return_type === 'fba_sin_devolucion');
     } else if (channelFilter === 'fbm') {
-      filtered = filtered.filter(r => r.return_type === 'fbm');
+      filtered = filtered.filter(r => r.return_type === 'fbm' || r.return_type === 'fbm_sin_devolucion');
     }
 
     // Gestión (Pendiente/Seguimiento/Finalizado/Descartado)
@@ -481,6 +481,12 @@
     const st = r.return_request_status ? (FBA_STATUS_LABELS[r.return_request_status] || r.return_request_status) : null;
     if (disp && st) return `${disp} — ${st}`;
     return disp || st || '—';
+  }
+
+  function channelLabel(return_type) {
+    if (return_type === 'fba_sin_devolucion') return 'FBA*';
+    if (return_type === 'fbm_sin_devolucion') return 'FBM*';
+    return return_type.toUpperCase();
   }
 
   function sortRows(list) {
@@ -559,7 +565,7 @@
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td><span class="badge ${r.alert_level}">${labelFor(r.alert_level)}</span></td>
-        <td>${r.return_type === 'fba_sin_devolucion' ? 'FBA*' : r.return_type.toUpperCase()}</td>
+        <td>${channelLabel(r.return_type)}</td>
         <td>
           <div class="order-id">${r.order_id}${r.order_return_count > 1 ? ` <span class="muted">(${r.order_return_count} solicitudes para este producto)</span>` : ''}</div>
           <div>${r.product_name || r.sku || ''}</div>
@@ -693,7 +699,7 @@
     const list = sortRows(applyFilterAndSearch());
     const data = list.map(r => ({
       'Estado': labelFor(r.alert_level),
-      'Canal': r.return_type === 'fba_sin_devolucion' ? 'FBA*' : r.return_type.toUpperCase(),
+      'Canal': channelLabel(r.return_type),
       'Pedido': r.order_id,
       'Producto': r.product_name || r.sku || '',
       'Fecha pedido': fmtDate(r.order_date),
