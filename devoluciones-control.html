@@ -149,6 +149,7 @@
   .actions button:hover { border-color: var(--accent); }
   .actions button.resolve:hover { border-color: var(--green); color: var(--green); }
   .actions button.dismiss:hover { border-color: var(--gray); color: var(--gray); }
+  .actions button.receive:hover { border-color: var(--accent); color: var(--accent); }
 
   .empty { text-align: center; padding: 60px 20px; color: var(--text-dim); }
   .error { background: var(--red-bg); color: var(--red); padding: 12px 16px; border-radius: 8px; margin-bottom: 16px; font-size: 13px; }
@@ -422,7 +423,10 @@
         </td>
         <td>${fmtDate(r.order_date)}</td>
         <td>${fmtDate(r.request_date)}</td>
-        <td>${fmtDate(r.return_delivery_date)}</td>
+        <td>
+          ${fmtDate(r.return_delivery_date)}
+          ${r.received_manual_by ? `<div class="reason">a mano por ${r.received_manual_by}</div>` : ''}
+        </td>
         <td><span class="pill ${r.refund_applied ? 'yes' : 'no'}">${r.refund_applied ? 'Sí' : 'No'}</span></td>
         <td class="amount">${r.amount_at_risk != null ? fmtEUR(r.amount_at_risk) : '—'}</td>
         <td>${r.days_elapsed ?? '—'}</td>
@@ -433,8 +437,9 @@
         </td>
         <td>
           <div class="actions">
-            <button class="resolve" data-order="${r.order_id}" data-type="${r.return_type}" data-status="resolved">✓ Gestionado</button>
-            <button class="dismiss" data-order="${r.order_id}" data-type="${r.return_type}" data-status="dismissed">✕ Descartar</button>
+            ${r.return_type === 'fbm' ? `<button class="receive" data-order="${r.order_id}" data-type="${r.return_type}" data-action="received">📦 Marcar recibido</button>` : ''}
+            <button class="resolve" data-order="${r.order_id}" data-type="${r.return_type}" data-action="case" data-status="resolved">✓ Gestionado</button>
+            <button class="dismiss" data-order="${r.order_id}" data-type="${r.return_type}" data-action="case" data-status="dismissed">✕ Descartar</button>
           </div>
         </td>
       `;
@@ -447,7 +452,7 @@
       th.addEventListener('click', () => setSort(th.dataset.sort));
     });
     tbody.querySelectorAll('button').forEach(btn => {
-      btn.addEventListener('click', () => openModal(btn.dataset.order, btn.dataset.type, btn.dataset.status));
+      btn.addEventListener('click', () => openModal(btn.dataset.order, btn.dataset.type, btn.dataset.action, btn.dataset.status));
     });
   }
 
@@ -459,10 +464,17 @@
     return { pending: 'Pendiente', resolved: 'Gestionado', dismissed: 'Descartado', claim_filed: 'Reclamado' }[status] || status;
   }
 
-  function openModal(order_id, return_type, case_status) {
-    pendingAction = { order_id, return_type, case_status };
-    document.getElementById('modal-title').textContent =
-      case_status === 'resolved' ? 'Marcar como gestionado' : 'Descartar caso (no era pérdida)';
+  function openModal(order_id, return_type, action, case_status) {
+    pendingAction = { order_id, return_type, action, case_status };
+    const titles = {
+      received: 'Marcar como recibido',
+      resolved: 'Marcar como gestionado',
+      dismissed: 'Descartar caso (no era pérdida)'
+    };
+    document.getElementById('modal-title').textContent = titles[action === 'received' ? 'received' : case_status];
+    document.getElementById('modal-notes').placeholder = action === 'received'
+      ? 'Nota (opcional): en qué estado llegó, si falta algo...'
+      : 'Qué hiciste, qué encontraste...';
     document.getElementById('modal-notes').value = '';
     document.getElementById('modal-handler').value = '';
     document.getElementById('modal-backdrop').classList.add('open');
@@ -476,20 +488,34 @@
   document.getElementById('modal-cancel').addEventListener('click', closeModal);
   document.getElementById('modal-confirm').addEventListener('click', async () => {
     if (!pendingAction) return;
-    const handledBy = document.getElementById('modal-handler').value;
-    if (!handledBy) {
-      alert('Selecciona quién lo gestiona antes de confirmar.');
+    const who = document.getElementById('modal-handler').value;
+    if (!who) {
+      alert('Selecciona quién eres antes de confirmar.');
       return;
     }
     const notes = document.getElementById('modal-notes').value;
-    const { error } = await sb.from('return_case_actions').upsert({
-      order_id: pendingAction.order_id,
-      return_type: pendingAction.return_type,
-      case_status: pendingAction.case_status,
-      notes: notes || null,
-      handled_by: handledBy,
-      updated_at: new Date().toISOString()
-    }, { onConflict: 'order_id,return_type' });
+
+    let payload;
+    if (pendingAction.action === 'received') {
+      payload = {
+        order_id: pendingAction.order_id,
+        return_type: pendingAction.return_type,
+        received_manual_at: new Date().toISOString(),
+        received_by: who,
+        received_notes: notes || null
+      };
+    } else {
+      payload = {
+        order_id: pendingAction.order_id,
+        return_type: pendingAction.return_type,
+        case_status: pendingAction.case_status,
+        notes: notes || null,
+        handled_by: who,
+        updated_at: new Date().toISOString()
+      };
+    }
+
+    const { error } = await sb.from('return_case_actions').upsert(payload, { onConflict: 'order_id,return_type' });
     if (error) {
       alert('Error guardando: ' + error.message);
       return;
@@ -543,4 +569,5 @@
 
 </body>
 </html>
+
 
