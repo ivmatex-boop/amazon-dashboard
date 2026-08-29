@@ -417,7 +417,7 @@
         <td><span class="badge ${r.alert_level}">${labelFor(r.alert_level)}</span></td>
         <td>${r.return_type === 'fba_sin_devolucion' ? 'FBA*' : r.return_type.toUpperCase()}</td>
         <td>
-          <div class="order-id">${r.order_id}${r.order_return_count > 1 ? ` <span class="muted">(${r.order_return_count} devoluciones en este pedido)</span>` : ''}</div>
+          <div class="order-id">${r.order_id}${r.order_return_count > 1 ? ` <span class="muted">(${r.order_return_count} solicitudes para este producto)</span>` : ''}</div>
           <div>${r.product_name || r.sku || ''}</div>
           <div class="reason">${r.alert_level !== 'none' ? (r.alert_reason || '') : ''}</div>
         </td>
@@ -437,9 +437,9 @@
         </td>
         <td>
           <div class="actions">
-            ${r.return_type === 'fbm' ? `<button class="receive" data-order="${r.order_id}" data-type="${r.return_type}" data-action="received">📦 Marcar recibido</button>` : ''}
-            <button class="resolve" data-order="${r.order_id}" data-type="${r.return_type}" data-action="case" data-status="resolved">✓ Gestionado</button>
-            <button class="dismiss" data-order="${r.order_id}" data-type="${r.return_type}" data-action="case" data-status="dismissed">✕ Descartar</button>
+            ${r.return_type === 'fbm' ? `<button class="receive" data-order="${r.order_id}" data-type="${r.return_type}" data-sku="${r.sku || ''}" data-action="received">📦 Marcar recibido</button>` : ''}
+            <button class="resolve" data-order="${r.order_id}" data-type="${r.return_type}" data-sku="${r.sku || ''}" data-action="case" data-status="resolved">✓ Gestionado</button>
+            <button class="dismiss" data-order="${r.order_id}" data-type="${r.return_type}" data-sku="${r.sku || ''}" data-action="case" data-status="dismissed">✕ Descartar</button>
           </div>
         </td>
       `;
@@ -452,7 +452,7 @@
       th.addEventListener('click', () => setSort(th.dataset.sort));
     });
     tbody.querySelectorAll('button').forEach(btn => {
-      btn.addEventListener('click', () => openModal(btn.dataset.order, btn.dataset.type, btn.dataset.action, btn.dataset.status));
+      btn.addEventListener('click', () => openModal(btn.dataset.order, btn.dataset.type, btn.dataset.sku, btn.dataset.action, btn.dataset.status));
     });
   }
 
@@ -464,8 +464,8 @@
     return { pending: 'Pendiente', resolved: 'Gestionado', dismissed: 'Descartado', claim_filed: 'Reclamado' }[status] || status;
   }
 
-  function openModal(order_id, return_type, action, case_status) {
-    pendingAction = { order_id, return_type, action, case_status };
+  function openModal(order_id, return_type, sku, action, case_status) {
+    pendingAction = { order_id, return_type, sku: sku || '', action, case_status };
     const titles = {
       received: 'Marcar como recibido',
       resolved: 'Marcar como gestionado',
@@ -500,6 +500,7 @@
       payload = {
         order_id: pendingAction.order_id,
         return_type: pendingAction.return_type,
+        sku: pendingAction.sku,
         received_manual_at: new Date().toISOString(),
         received_by: who,
         received_notes: notes || null
@@ -508,6 +509,7 @@
       payload = {
         order_id: pendingAction.order_id,
         return_type: pendingAction.return_type,
+        sku: pendingAction.sku,
         case_status: pendingAction.case_status,
         notes: notes || null,
         handled_by: who,
@@ -515,7 +517,7 @@
       };
     }
 
-    const { error } = await sb.from('return_case_actions').upsert(payload, { onConflict: 'order_id,return_type' });
+    const { error } = await sb.from('return_case_actions').upsert(payload, { onConflict: 'order_id,return_type,sku' });
     if (error) {
       alert('Error guardando: ' + error.message);
       return;
@@ -569,5 +571,3 @@
 
 </body>
 </html>
-
-
