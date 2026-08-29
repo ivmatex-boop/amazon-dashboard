@@ -60,6 +60,17 @@
   }
   .search-box::placeholder { color: var(--text-dim); }
 
+  .toolbar select {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: var(--text);
+    font-size: 13px;
+  }
+
+  .filter-groups { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+
   .export-btn {
     background: var(--panel);
     border: 1px solid var(--panel-border);
@@ -244,18 +255,54 @@
     <option value="Petro">Petro</option>
     <option value="Luis">Luis</option>
   </select>
+  <select id="gestion-filter">
+    <option value="active" selected>Activos (Pendiente + Seguimiento)</option>
+    <option value="pending">Solo Pendiente</option>
+    <option value="claim_filed">Solo Seguimiento</option>
+    <option value="resolved">Solo Finalizado</option>
+    <option value="dismissed">Solo Descartado</option>
+    <option value="all">Todos (incluye Finalizado/Descartado)</option>
+  </select>
+  <select id="date-filter">
+    <option value="all" selected>Todas las fechas (solicitud)</option>
+    <option value="today">Último día</option>
+    <option value="week">Última semana</option>
+    <option value="month">Último mes</option>
+    <option value="specific-month">Un mes concreto…</option>
+    <option value="specific-year">Un año concreto…</option>
+  </select>
+  <select id="date-month-picker" style="display:none;">
+    <option value="0">Enero</option>
+    <option value="1">Febrero</option>
+    <option value="2">Marzo</option>
+    <option value="3">Abril</option>
+    <option value="4">Mayo</option>
+    <option value="5">Junio</option>
+    <option value="6">Julio</option>
+    <option value="7">Agosto</option>
+    <option value="8">Septiembre</option>
+    <option value="9">Octubre</option>
+    <option value="10">Noviembre</option>
+    <option value="11">Diciembre</option>
+  </select>
+  <select id="date-year-picker" style="display:none;"></select>
   <button id="export-btn" class="export-btn">⬇ Descargar Excel</button>
 </div>
 
-<div class="filters" id="filters">
-  <button data-filter="all" class="active">Todos</button>
-  <button data-filter="red">🔴 Urgente</button>
-  <button data-filter="orange">🟠 Últimos días</button>
-  <button data-filter="yellow">🟡 Vigilar</button>
-  <button data-filter="gray">⚪ Revisar</button>
-  <button data-filter="none">🟢 Sin incidencia</button>
-  <button data-filter="fba">Solo FBA</button>
-  <button data-filter="fbm">Solo FBM</button>
+<div class="filter-groups">
+  <div class="filters" id="filters">
+    <button data-filter="all" class="active">Todos</button>
+    <button data-filter="red">🔴 Urgente</button>
+    <button data-filter="orange">🟠 Últimos días</button>
+    <button data-filter="yellow">🟡 Vigilar</button>
+    <button data-filter="gray">⚪ Revisar</button>
+    <button data-filter="none">🟢 Sin incidencia</button>
+  </div>
+  <div class="filters" id="channel-filters">
+    <button data-channel="all" class="active">Todos los canales</button>
+    <button data-channel="fba">Solo FBA</button>
+    <button data-channel="fbm">Solo FBM</button>
+  </div>
 </div>
 
 <div class="result-count" id="result-count"></div>
@@ -301,7 +348,12 @@
 
   let rows = [];
   let activeFilter = "all";
+  let channelFilter = "all";
   let gestorFilter = "all";
+  let gestionFilter = "active";
+  let dateFilter = "all";
+  let dateMonth = 0;
+  let dateYear = new Date().getFullYear();
   let searchTerm = "";
   let sortKey = "severity";   // severity | order_date | request_date | days_elapsed | amount_at_risk
   let sortDir = "desc";
@@ -328,8 +380,27 @@
       return;
     }
     rows = data || [];
+    populateYearPicker();
     renderKpis();
     render();
+  }
+
+  function populateYearPicker() {
+    const years = new Set();
+    rows.forEach(r => {
+      if (r.request_date) {
+        const d = new Date(r.request_date);
+        if (!isNaN(d.getTime())) years.add(d.getFullYear());
+      }
+    });
+    const currentYear = new Date().getFullYear();
+    years.add(currentYear);
+    const sortedYears = [...years].sort((a, b) => b - a);
+    const picker = document.getElementById('date-year-picker');
+    const prevValue = picker.value;
+    picker.innerHTML = sortedYears.map(y => `<option value="${y}">${y}</option>`).join('');
+    picker.value = sortedYears.includes(Number(prevValue)) ? prevValue : String(currentYear);
+    dateYear = Number(picker.value);
   }
 
   function renderKpis() {
@@ -344,23 +415,72 @@
 
   function applyFilterAndSearch() {
     let filtered = rows;
-    if (activeFilter === 'fba') {
-      filtered = filtered.filter(r => r.return_type === 'fba' || r.return_type === 'fba_sin_devolucion');
-    } else if (activeFilter === 'fbm') {
-      filtered = filtered.filter(r => r.return_type === 'fbm');
-    } else if (activeFilter !== 'all') {
+
+    // Estado de alerta (color)
+    if (activeFilter !== 'all') {
       filtered = filtered.filter(r => r.alert_level === activeFilter);
     }
+
+    // Canal (FBA/FBM) — combinable con el de arriba
+    if (channelFilter === 'fba') {
+      filtered = filtered.filter(r => r.return_type === 'fba' || r.return_type === 'fba_sin_devolucion');
+    } else if (channelFilter === 'fbm') {
+      filtered = filtered.filter(r => r.return_type === 'fbm');
+    }
+
+    // Gestión (Pendiente/Seguimiento/Finalizado/Descartado)
+    if (gestionFilter === 'active') {
+      filtered = filtered.filter(r => r.case_status === 'pending' || r.case_status === 'claim_filed');
+    } else if (gestionFilter !== 'all') {
+      filtered = filtered.filter(r => r.case_status === gestionFilter);
+    }
+
+    // Gestor
     if (gestorFilter === '__unassigned') {
       filtered = filtered.filter(r => !r.handled_by);
     } else if (gestorFilter !== 'all') {
       filtered = filtered.filter(r => r.handled_by === gestorFilter);
     }
+
+    // Fecha de solicitud
+    if (dateFilter !== 'all') {
+      const now = new Date();
+      filtered = filtered.filter(r => {
+        if (!r.request_date) return false;
+        const d = new Date(r.request_date);
+        if (isNaN(d.getTime())) return false;
+        const diffDays = (now - d) / (1000 * 60 * 60 * 24);
+        if (dateFilter === 'today') return diffDays <= 1;
+        if (dateFilter === 'week') return diffDays <= 7;
+        if (dateFilter === 'month') return diffDays <= 30;
+        if (dateFilter === 'specific-month') return d.getMonth() === dateMonth && d.getFullYear() === dateYear;
+        if (dateFilter === 'specific-year') return d.getFullYear() === dateYear;
+        return true;
+      });
+    }
+
     if (searchTerm.trim()) {
       const term = searchTerm.trim().toLowerCase();
       filtered = filtered.filter(r => (r.order_id || '').toLowerCase().includes(term));
     }
     return filtered;
+  }
+
+  const FBA_DISPOSITION_LABELS = {
+    SELLABLE: 'Vendible',
+    CUSTOMER_DAMAGED: 'Dañado por el cliente',
+    DEFECTIVE: 'Defectuoso'
+  };
+  const FBA_STATUS_LABELS = {
+    'Unit returned to inventory': 'Devuelto al inventario',
+    'IMMEDIATE_DONATION': 'Donado por Amazon'
+  };
+  function fbaWarehouseStatus(r) {
+    if (r.return_type !== 'fba') return '—';
+    const disp = r.detailed_disposition ? (FBA_DISPOSITION_LABELS[r.detailed_disposition] || r.detailed_disposition) : null;
+    const st = r.return_request_status ? (FBA_STATUS_LABELS[r.return_request_status] || r.return_request_status) : null;
+    if (disp && st) return `${disp} — ${st}`;
+    return disp || st || '—';
   }
 
   function sortRows(list) {
@@ -425,6 +545,7 @@
           <th class="sortable" data-sort="request_date">Fecha solicitud <span class="arrow">${arrowFor('request_date')}</span></th>
           <th class="sortable" data-sort="return_delivery_date">Fecha recepción <span class="arrow">${arrowFor('return_delivery_date')}</span></th>
           <th>Reembolso</th>
+          <th>Estado en almacén</th>
           <th class="sortable" data-sort="amount_at_risk">Importe <span class="arrow">${arrowFor('amount_at_risk')}</span></th>
           <th class="sortable" data-sort="days_elapsed">Días <span class="arrow">${arrowFor('days_elapsed')}</span></th>
           <th>Gestión</th>
@@ -451,6 +572,7 @@
           ${r.received_manual_by ? `<div class="reason">a mano por ${r.received_manual_by}</div>` : ''}
         </td>
         <td><span class="pill ${r.refund_applied ? 'yes' : 'no'}">${r.refund_applied ? 'Sí' : 'No'}</span></td>
+        <td>${fbaWarehouseStatus(r)}</td>
         <td class="amount">${r.amount_at_risk != null ? fmtEUR(r.amount_at_risk) : '—'}</td>
         <td>${r.days_elapsed ?? '—'}</td>
         <td>
@@ -578,6 +700,7 @@
       'Fecha solicitud': fmtDate(r.request_date),
       'Fecha recepción': fmtDate(r.return_delivery_date),
       'Reembolso': r.refund_applied ? 'Sí' : 'No',
+      'Estado en almacén': fbaWarehouseStatus(r),
       'Importe': r.amount_at_risk != null ? Number(r.amount_at_risk) : '',
       'Días': r.days_elapsed ?? '',
       'Motivo': r.alert_reason || '',
@@ -609,6 +732,36 @@
 
   document.getElementById('gestor-filter').addEventListener('change', (e) => {
     gestorFilter = e.target.value;
+    render();
+  });
+
+  document.getElementById('channel-filters').addEventListener('click', (e) => {
+    if (e.target.tagName !== 'BUTTON') return;
+    document.querySelectorAll('#channel-filters button').forEach(b => b.classList.remove('active'));
+    e.target.classList.add('active');
+    channelFilter = e.target.dataset.channel;
+    render();
+  });
+
+  document.getElementById('gestion-filter').addEventListener('change', (e) => {
+    gestionFilter = e.target.value;
+    render();
+  });
+
+  document.getElementById('date-filter').addEventListener('change', (e) => {
+    dateFilter = e.target.value;
+    document.getElementById('date-month-picker').style.display = (dateFilter === 'specific-month') ? 'inline-block' : 'none';
+    document.getElementById('date-year-picker').style.display = (dateFilter === 'specific-month' || dateFilter === 'specific-year') ? 'inline-block' : 'none';
+    render();
+  });
+
+  document.getElementById('date-month-picker').addEventListener('change', (e) => {
+    dateMonth = Number(e.target.value);
+    render();
+  });
+
+  document.getElementById('date-year-picker').addEventListener('change', (e) => {
+    dateYear = Number(e.target.value);
     render();
   });
 
