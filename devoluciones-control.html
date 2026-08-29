@@ -128,6 +128,7 @@
 
   .case-tag { font-size: 11px; color: var(--text-dim); }
   .case-tag.resolved { color: var(--green); }
+  .case-tag.resolved.perdida { color: var(--red); }
   .case-tag.dismissed { color: var(--gray); }
   .case-tag.claim_filed { color: var(--accent); }
 
@@ -149,6 +150,7 @@
   .actions button:hover { border-color: var(--accent); }
   .actions button.resolve:hover { border-color: var(--green); color: var(--green); }
   .actions button.dismiss:hover { border-color: var(--gray); color: var(--gray); }
+  .actions button.followup:hover { border-color: var(--accent); color: var(--accent); }
   .actions button.receive:hover { border-color: var(--accent); color: var(--accent); }
 
   .empty { text-align: center; padding: 60px 20px; color: var(--text-dim); }
@@ -235,6 +237,13 @@
 
 <div class="toolbar">
   <input type="text" id="search" class="search-box" placeholder="Buscar por nº de pedido...">
+  <select id="gestor-filter">
+    <option value="all">Todos los gestores</option>
+    <option value="__unassigned">Sin asignar</option>
+    <option value="Iván">Iván</option>
+    <option value="Petro">Petro</option>
+    <option value="Luis">Luis</option>
+  </select>
   <button id="export-btn" class="export-btn">⬇ Descargar Excel</button>
 </div>
 
@@ -263,6 +272,14 @@
       <option value="Petro">Petro</option>
       <option value="Luis">Luis</option>
     </select>
+    <div id="modal-outcome-wrap" style="display:none;">
+      <label for="modal-outcome">¿Ganada o perdida?</label>
+      <select id="modal-outcome">
+        <option value="">Selecciona...</option>
+        <option value="ganada">🟢 Ganada (recuperado)</option>
+        <option value="perdida">🔴 Perdida (no recuperado)</option>
+      </select>
+    </div>
     <label for="modal-notes">Nota (opcional)</label>
     <textarea id="modal-notes" placeholder="Qué hiciste, qué encontraste..."></textarea>
     <div class="modal-buttons">
@@ -284,6 +301,7 @@
 
   let rows = [];
   let activeFilter = "all";
+  let gestorFilter = "all";
   let searchTerm = "";
   let sortKey = "severity";   // severity | order_date | request_date | days_elapsed | amount_at_risk
   let sortDir = "desc";
@@ -332,6 +350,11 @@
       filtered = filtered.filter(r => r.return_type === 'fbm');
     } else if (activeFilter !== 'all') {
       filtered = filtered.filter(r => r.alert_level === activeFilter);
+    }
+    if (gestorFilter === '__unassigned') {
+      filtered = filtered.filter(r => !r.handled_by);
+    } else if (gestorFilter !== 'all') {
+      filtered = filtered.filter(r => r.handled_by === gestorFilter);
     }
     if (searchTerm.trim()) {
       const term = searchTerm.trim().toLowerCase();
@@ -431,14 +454,15 @@
         <td class="amount">${r.amount_at_risk != null ? fmtEUR(r.amount_at_risk) : '—'}</td>
         <td>${r.days_elapsed ?? '—'}</td>
         <td>
-          <span class="case-tag ${r.case_status}">${caseLabel(r.case_status)}</span>
+          <span class="case-tag ${r.case_status}${r.case_status === 'resolved' && r.outcome ? ' ' + r.outcome : ''}">${caseLabel(r.case_status, r.outcome)}</span>
           ${r.handled_by ? `<div class="reason">por ${r.handled_by}</div>` : ''}
           ${r.case_notes ? `<div class="reason">"${r.case_notes}"</div>` : ''}
         </td>
         <td>
           <div class="actions">
             ${r.return_type === 'fbm' ? `<button class="receive" data-order="${r.order_id}" data-type="${r.return_type}" data-sku="${r.sku || ''}" data-action="received">📦 Marcar recibido</button>` : ''}
-            <button class="resolve" data-order="${r.order_id}" data-type="${r.return_type}" data-sku="${r.sku || ''}" data-action="case" data-status="resolved">✓ Gestionado</button>
+            <button class="resolve" data-order="${r.order_id}" data-type="${r.return_type}" data-sku="${r.sku || ''}" data-action="case" data-status="resolved">✓ Finalizado</button>
+            <button class="followup" data-order="${r.order_id}" data-type="${r.return_type}" data-sku="${r.sku || ''}" data-action="case" data-status="claim_filed">⏳ Seguimiento</button>
             <button class="dismiss" data-order="${r.order_id}" data-type="${r.return_type}" data-sku="${r.sku || ''}" data-action="case" data-status="dismissed">✕ Descartar</button>
           </div>
         </td>
@@ -460,16 +484,22 @@
     return { red: '🔴 Urgente', orange: '🟠 Últimos días', yellow: '🟡 Vigilar', gray: '⚪ Revisar', none: '🟢 OK' }[level] || level;
   }
 
-  function caseLabel(status) {
-    return { pending: 'Pendiente', resolved: 'Gestionado', dismissed: 'Descartado', claim_filed: 'Reclamado' }[status] || status;
+  function caseLabel(status, outcome) {
+    if (status === 'resolved') {
+      if (outcome === 'ganada') return 'Finalizado (Ganada)';
+      if (outcome === 'perdida') return 'Finalizado (Perdida)';
+      return 'Finalizado';
+    }
+    return { pending: 'Pendiente', dismissed: 'Descartado', claim_filed: 'Seguimiento' }[status] || status;
   }
 
   function openModal(order_id, return_type, sku, action, case_status) {
     pendingAction = { order_id, return_type, sku: sku || '', action, case_status };
     const titles = {
       received: 'Marcar como recibido',
-      resolved: 'Marcar como gestionado',
-      dismissed: 'Descartar caso (no era pérdida)'
+      resolved: 'Marcar como finalizado',
+      dismissed: 'Descartar caso (no era pérdida)',
+      claim_filed: 'Marcar como seguimiento'
     };
     document.getElementById('modal-title').textContent = titles[action === 'received' ? 'received' : case_status];
     document.getElementById('modal-notes').placeholder = action === 'received'
@@ -477,6 +507,8 @@
       : 'Qué hiciste, qué encontraste...';
     document.getElementById('modal-notes').value = '';
     document.getElementById('modal-handler').value = '';
+    document.getElementById('modal-outcome').value = '';
+    document.getElementById('modal-outcome-wrap').style.display = (case_status === 'resolved') ? 'block' : 'none';
     document.getElementById('modal-backdrop').classList.add('open');
   }
 
@@ -492,6 +524,14 @@
     if (!who) {
       alert('Selecciona quién eres antes de confirmar.');
       return;
+    }
+    let outcome = null;
+    if (pendingAction.action === 'case' && pendingAction.case_status === 'resolved') {
+      outcome = document.getElementById('modal-outcome').value;
+      if (!outcome) {
+        alert('Selecciona si el caso se ha ganado o perdido antes de confirmar.');
+        return;
+      }
     }
     const notes = document.getElementById('modal-notes').value;
 
@@ -511,6 +551,7 @@
         return_type: pendingAction.return_type,
         sku: pendingAction.sku,
         case_status: pendingAction.case_status,
+        outcome: outcome,
         notes: notes || null,
         handled_by: who,
         updated_at: new Date().toISOString()
@@ -540,7 +581,8 @@
       'Importe': r.amount_at_risk != null ? Number(r.amount_at_risk) : '',
       'Días': r.days_elapsed ?? '',
       'Motivo': r.alert_reason || '',
-      'Gestión': caseLabel(r.case_status),
+      'Gestión': caseLabel(r.case_status, r.outcome),
+      'Resultado': r.case_status === 'resolved' ? (r.outcome === 'ganada' ? 'Ganada' : r.outcome === 'perdida' ? 'Perdida' : '') : '',
       'Gestionado por': r.handled_by || '',
       'Nota': r.case_notes || ''
     }));
@@ -562,6 +604,11 @@
 
   document.getElementById('search').addEventListener('input', (e) => {
     searchTerm = e.target.value;
+    render();
+  });
+
+  document.getElementById('gestor-filter').addEventListener('change', (e) => {
+    gestorFilter = e.target.value;
     render();
   });
 
