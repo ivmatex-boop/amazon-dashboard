@@ -93,6 +93,13 @@
   .kpi .sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
   .kpi.risk { border-color: #f4c3c3; background: linear-gradient(180deg, #fff, #fff6f6); }
   .kpi.risk .value { color: var(--red); }
+  .kpi.won { border-color: #b7e6c8; background: linear-gradient(180deg, #fff, #f3fbf6); }
+  .kpi.won .value { color: var(--green); }
+  .kpis { margin-bottom: 6px; }
+  .kpi-scope { font-size: 12px; color: var(--text-dim); margin-bottom: 18px; }
+  .cond { display: inline-block; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 6px; margin-top: 3px; }
+  .cond.ok { background: var(--green-bg); color: var(--green); }
+  .cond.bad { background: var(--red-bg); color: var(--red); }
 
   /* ===== Barra de filtros ===== */
   .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 14px; }
@@ -327,6 +334,33 @@
   .fstep .t { font-size: 13px; color: var(--text-dim); }
   .fstep .n { font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
 
+  .tree-wrap { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+  .tree { display: grid; gap: 6px; }
+  .tnode { display: grid; grid-template-columns: 210px 1fr 50px 150px; gap: 10px; align-items: center; font-size: 13px; }
+  .tnode .tl { color: var(--text); }
+  .tnode.lvl0 .tl { font-weight: 700; }
+  .tnode.lvl1 .tl { padding-left: 16px; }
+  .tnode.lvl2 .tl { padding-left: 34px; }
+  .tnode.lvl3 .tl { padding-left: 52px; color: var(--text-dim); }
+  .tnode .tl::before { content: ""; }
+  .tnode.lvl1 .tl::before, .tnode.lvl2 .tl::before, .tnode.lvl3 .tl::before { content: "└ "; color: #b4bdcb; }
+  .tb { height: 18px; background: var(--panel-2); border-radius: 5px; overflow: hidden; }
+  .tb span { display: block; height: 100%; border-radius: 5px; }
+  .tn { font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+  .tx { font-size: 12px; color: var(--text-dim); }
+  .c-all .tb span { background: var(--navy); }
+  .c-ok .tb span { background: #57b98a; }
+  .c-mute .tb span { background: #c3cad6; }
+  .c-inc .tb span { background: var(--orange); }
+  .c-claim .tb span { background: var(--brand); }
+  .c-won .tb span { background: var(--green); } .c-won .tx { color: var(--green); font-weight: 700; }
+  .c-lost .tb span { background: var(--red); }
+  .c-pend .tb span { background: repeating-linear-gradient(45deg, #f2a3a3 0 6px, #fde9e9 6px 12px); }
+  .types { background: var(--panel-2); border: 1px solid var(--panel-border); border-radius: 10px; padding: 14px; display: grid; gap: 8px; }
+  .types-title { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); font-weight: 700; }
+  .trow { display: grid; grid-template-columns: 1fr auto; gap: 2px 10px; font-size: 13px; padding-bottom: 8px; border-bottom: 1px dashed var(--panel-border); }
+  .trow:last-child { border-bottom: 0; padding-bottom: 0; }
+  .trow .small { grid-column: 1 / -1; }
   .lb { display: grid; gap: 8px; }
   .lb-row { display: grid; grid-template-columns: 30px 1fr auto; gap: 10px; align-items: center; background: var(--panel-2); border: 1px solid var(--panel-border); border-radius: 10px; padding: 10px 12px; }
   .pos { font-family: var(--f-brand); font-weight: 800; color: var(--text-dim); }
@@ -340,7 +374,9 @@
   .small { font-size: 12px; color: var(--text-dim); }
 
   @media (max-width: 900px) {
-    .hero, .grid { grid-template-columns: 1fr; }
+    .hero, .grid, .tree-wrap { grid-template-columns: 1fr; }
+    .tnode { grid-template-columns: 150px 1fr 40px; }
+    .tnode .tx { grid-column: 1 / -1; padding-left: 16px; }
     .wrap, .brand-bar { padding-left: 16px; padding-right: 16px; }
     .tabs { padding: 0 8px; }
     .search-box { min-width: 0; width: 100%; }
@@ -378,20 +414,30 @@
   <div class="kpi risk">
     <div class="label">Dinero en riesgo</div>
     <div class="value" id="kpi-risk">—</div>
+    <div class="sub">casos rojos/naranjas sin cerrar</div>
   </div>
   <div class="kpi">
-    <div class="label">Casos con incidencia</div>
+    <div class="label">Incidencias abiertas</div>
     <div class="value" id="kpi-count">—</div>
+    <div class="sub" id="kpi-count-sub"></div>
   </div>
   <div class="kpi">
     <div class="label">Urgentes (rojo)</div>
     <div class="value" id="kpi-red">—</div>
+    <div class="sub">pendientes de reclamar</div>
+  </div>
+  <div class="kpi won">
+    <div class="label">Recuperado</div>
+    <div class="value" id="kpi-won">—</div>
+    <div class="sub" id="kpi-won-sub"></div>
   </div>
   <div class="kpi">
     <div class="label">Total devoluciones</div>
     <div class="value" id="kpi-total">—</div>
+    <div class="sub" id="kpi-total-sub"></div>
   </div>
 </div>
+<div class="kpi-scope" id="kpi-scope"></div>
 
 <div class="toolbar">
   <input type="text" id="search" class="search-box" placeholder="Buscar por nº de pedido...">
@@ -510,15 +556,21 @@
 
   <section class="grid">
     <div class="card span2">
-      <h2>Recuperado por mes</h2>
-      <p class="hint">Barras: dinero recuperado cada mes (según la fecha en que se cerró el caso). Línea: acumulado.</p>
-      <div class="chartbox"><canvas id="rec-chart-month" aria-label="Dinero recuperado por mes"></canvas><div class="chart-empty" id="rec-month-empty" hidden>Todavía no hay casos ganados con importe en este periodo.</div></div>
+      <h2>Qué ha pasado con las devoluciones</h2>
+      <p class="hint" id="rec-tree-hint">Devoluciones solicitadas en el periodo, separadas entre las que volvieron bien y las que tuvieron incidencia.</p>
+      <div class="tree-wrap">
+        <div class="tree" id="rec-tree"></div>
+        <div class="types">
+          <div class="types-title">Tipos de incidencia</div>
+          <div id="rec-types"></div>
+        </div>
+      </div>
     </div>
 
-    <div class="card">
-      <h2>Embudo de reclamaciones</h2>
-      <p class="hint">Casos con incidencia detectados en el periodo y qué ha pasado con ellos.</p>
-      <div class="funnel" id="rec-funnel"></div>
+    <div class="card span2">
+      <h2>Recuperado por mes</h2>
+      <p class="hint">Barras: dinero recuperado de las devoluciones de cada mes (por fecha de solicitud). Línea: acumulado.</p>
+      <div class="chartbox"><canvas id="rec-chart-month" aria-label="Dinero recuperado por mes"></canvas><div class="chart-empty" id="rec-month-empty" hidden>Todavía no hay casos ganados con importe en este periodo.</div></div>
     </div>
 
     <div class="card">
@@ -533,9 +585,9 @@
       <div class="lb" id="rec-lb"></div>
     </div>
 
-    <div class="card">
+    <div class="card span2">
       <h2>Últimas victorias</h2>
-      <p class="hint">Casos ganados más recientes.</p>
+      <p class="hint">Casos ganados más recientes del periodo.</p>
       <div class="feed" id="rec-feed"></div>
     </div>
   </section>
@@ -551,6 +603,17 @@
       <option value="Petro">Petro</option>
       <option value="Luis">Luis</option>
     </select>
+    <div id="modal-condition-wrap" style="display:none;">
+      <label for="modal-condition">¿En qué estado ha llegado?</label>
+      <select id="modal-condition">
+        <option value="">Selecciona...</option>
+        <option value="correcto">✅ Correcto (se puede revender)</option>
+        <option value="danado">💥 Dañado / roto</option>
+        <option value="diferente">🔁 Producto diferente</option>
+        <option value="incompleto">🧩 Incompleto (falta algo)</option>
+      </select>
+      <div class="field-hint">Si no llega correcto, el caso pasa a 🔴 Urgente para reclamarlo (SAFE-T o reembolso parcial).</div>
+    </div>
     <div id="modal-outcome-wrap" style="display:none;">
       <label for="modal-outcome">¿Ganada o perdida?</label>
       <select id="modal-outcome">
@@ -627,6 +690,8 @@
     __none: 'Sin motivo indicado'
   };
 
+  const CONDITION_LABELS = { correcto: 'Llegó correcto', danado: 'Llegó dañado', diferente: 'Producto diferente', incompleto: 'Llegó incompleto' };
+
   const fmtEUR = (n) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR' }).format(n || 0);
   const fmtEUR0 = (n) => new Intl.NumberFormat('es-ES', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(n || 0);
   const fmtDate = (d) => {
@@ -648,7 +713,6 @@
     }
     rows = data || [];
     populateYearPicker();
-    renderKpis();
     render();
     if (activeTab === 'recovery') renderRecovery();
   }
@@ -671,36 +735,49 @@
     dateYear = Number(picker.value);
   }
 
+  // Los KPIs de arriba siguen a los filtros de canal, gestor, fecha y búsqueda
+  // (no a los de color ni gestión, para que siempre se vea el panorama completo).
+  // Un caso deja de estar "en riesgo" en cuanto se cierra (Finalizado o Descartado).
+  const isOpen = r => r.case_status === 'pending' || r.case_status === 'claim_filed';
+
   function renderKpis() {
-    const risk = rows.filter(r => r.alert_level === 'red' || r.alert_level === 'orange')
-                      .reduce((sum, r) => sum + (Number(r.amount_at_risk) || 0), 0);
-    const withIssue = rows.filter(r => r.alert_level !== 'none');
+    const scope = applyScopeFilters(rows);
+    const openRisk = scope.filter(r => (r.alert_level === 'red' || r.alert_level === 'orange') && isOpen(r));
+    const risk = openRisk.reduce((sum, r) => sum + (Number(r.amount_at_risk) || 0), 0);
+    const withIssue = scope.filter(r => r.alert_level !== 'none' && isOpen(r));
+    const closed = scope.filter(r => r.case_status === 'resolved' || r.case_status === 'dismissed');
+    const won = scope.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada');
+    const wonAmt = won.reduce((s, r) => s + (Number(r.recovered_amount) || 0), 0);
+    const received = scope.filter(r => r.alert_level === 'none' && r.received_confirmed);
+
     document.getElementById('kpi-risk').textContent = fmtEUR(risk);
     document.getElementById('kpi-count').textContent = withIssue.length;
-    document.getElementById('kpi-red').textContent = rows.filter(r => r.alert_level === 'red').length;
-    document.getElementById('kpi-total').textContent = rows.length;
+    document.getElementById('kpi-count-sub').textContent = closed.length ? `${closed.length} ya cerradas` : 'ninguna cerrada todavía';
+    document.getElementById('kpi-red').textContent = scope.filter(r => r.alert_level === 'red' && r.case_status === 'pending').length;
+    document.getElementById('kpi-won').textContent = fmtEUR(wonAmt);
+    document.getElementById('kpi-won-sub').textContent = `${won.length} caso${won.length === 1 ? '' : 's'} ganado${won.length === 1 ? '' : 's'}`;
+    document.getElementById('kpi-total').textContent = scope.length;
+    document.getElementById('kpi-total-sub').textContent = `${received.length} recibidas correctamente`;
+
+    const parts = [];
+    if (dateFilter !== 'all') parts.push(document.getElementById('date-filter').selectedOptions[0].textContent.replace('…', '') +
+      (dateFilter === 'specific-month' ? ' ' + document.getElementById('date-month-picker').selectedOptions[0].textContent + ' ' + dateYear : '') +
+      (dateFilter === 'specific-year' ? ' ' + dateYear : ''));
+    if (channelFilter !== 'all') parts.push(channelFilter.toUpperCase());
+    if (gestorFilter !== 'all') parts.push(gestorFilter === '__unassigned' ? 'sin asignar' : 'gestor ' + gestorFilter);
+    if (searchTerm.trim()) parts.push('búsqueda "' + searchTerm.trim() + '"');
+    document.getElementById('kpi-scope').textContent = parts.length ? 'Cifras filtradas por: ' + parts.join(' · ') : 'Cifras de todas las devoluciones (sin filtro de fecha).';
   }
 
-  function applyFilterAndSearch() {
-    let filtered = rows;
+  // Filtros de "alcance": canal, gestor, fecha de solicitud y búsqueda
+  function applyScopeFilters(list) {
+    let filtered = list;
 
-    // Estado de alerta (color)
-    if (activeFilter !== 'all') {
-      filtered = filtered.filter(r => r.alert_level === activeFilter);
-    }
-
-    // Canal (FBA/FBM) — combinable con el de arriba
+    // Canal (FBA/FBM)
     if (channelFilter === 'fba') {
       filtered = filtered.filter(r => r.return_type === 'fba' || r.return_type === 'fba_sin_devolucion');
     } else if (channelFilter === 'fbm') {
       filtered = filtered.filter(r => r.return_type === 'fbm' || r.return_type === 'fbm_sin_devolucion');
-    }
-
-    // Gestión (Pendiente/Seguimiento/Finalizado/Descartado)
-    if (gestionFilter === 'active') {
-      filtered = filtered.filter(r => r.case_status === 'pending' || r.case_status === 'claim_filed');
-    } else if (gestionFilter !== 'all') {
-      filtered = filtered.filter(r => r.case_status === gestionFilter);
     }
 
     // Gestor
@@ -730,6 +807,24 @@
     if (searchTerm.trim()) {
       const term = searchTerm.trim().toLowerCase();
       filtered = filtered.filter(r => (r.order_id || '').toLowerCase().includes(term));
+    }
+    return filtered;
+  }
+
+  // Tabla = alcance + estado de alerta (color) + gestión
+  function applyFilterAndSearch() {
+    let filtered = applyScopeFilters(rows);
+
+    // Estado de alerta (color)
+    if (activeFilter !== 'all') {
+      filtered = filtered.filter(r => r.alert_level === activeFilter);
+    }
+
+    // Gestión (Pendiente/Seguimiento/Finalizado/Descartado)
+    if (gestionFilter === 'active') {
+      filtered = filtered.filter(r => r.case_status === 'pending' || r.case_status === 'claim_filed');
+    } else if (gestionFilter !== 'all') {
+      filtered = filtered.filter(r => r.case_status === gestionFilter);
     }
     return filtered;
   }
@@ -797,6 +892,7 @@
   }
 
   function render() {
+    renderKpis();
     const content = document.getElementById('content');
     const filtered = sortRows(applyFilterAndSearch());
 
@@ -847,6 +943,7 @@
         <td>
           ${fmtDate(r.return_delivery_date)}
           ${r.received_manual_by ? `<div class="reason">a mano por ${r.received_manual_by}</div>` : ''}
+          ${r.received_manual_by ? `<span class="cond ${(r.received_condition || 'correcto') === 'correcto' ? 'ok' : 'bad'}">${CONDITION_LABELS[r.received_condition || 'correcto']}</span>` : ''}
         </td>
         <td><span class="pill ${r.refund_applied ? 'yes' : 'no'}">${r.refund_applied ? 'Sí' : 'No'}</span></td>
         <td>${fbaWarehouseStatus(r)}</td>
@@ -922,6 +1019,8 @@
     document.getElementById('modal-outcome').value = '';
     document.getElementById('modal-amount').value = '';
     document.getElementById('modal-reason').value = '';
+    document.getElementById('modal-condition').value = (action === 'received' && row && row.received_condition) ? row.received_condition : '';
+    document.getElementById('modal-condition-wrap').style.display = action === 'received' ? 'block' : 'none';
 
     // Si el caso ya estaba finalizado, precarga lo que tenía (para poder completar importe o motivo)
     if (case_status === 'resolved' && row && row.case_status === 'resolved') {
@@ -983,13 +1082,19 @@
 
     let payload;
     if (pendingAction.action === 'received') {
+      const condition = document.getElementById('modal-condition').value;
+      if (!condition) {
+        alert('Indica en qué estado ha llegado la devolución antes de confirmar.');
+        return;
+      }
       payload = {
         order_id: pendingAction.order_id,
         return_type: pendingAction.return_type,
         sku: pendingAction.sku,
         received_manual_at: new Date().toISOString(),
         received_by: who,
-        received_notes: notes || null
+        received_notes: notes || null,
+        received_condition: condition
       };
     } else {
       payload = {
@@ -1025,6 +1130,7 @@
       'Fecha pedido': fmtDate(r.order_date),
       'Fecha solicitud': fmtDate(r.request_date),
       'Fecha recepción': fmtDate(r.return_delivery_date),
+      'Estado al recibir (FBM)': r.received_manual_by ? CONDITION_LABELS[r.received_condition || 'correcto'] : '',
       'Reembolso': r.refund_applied ? 'Sí' : 'No',
       'Estado en almacén': fbaWarehouseStatus(r),
       'Importe': r.amount_at_risk != null ? Number(r.amount_at_risk) : '',
@@ -1139,28 +1245,65 @@
     return Math.floor((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - ref) / (7 * 864e5));
   }
 
+  // Clasificación de cada devolución para el informe
+  //  - recibida: volvió y no hay nada que reclamar
+  //  - camino:   todavía no ha llegado y no hay alerta
+  //  - aviso:    FBM "reembolso pendiente" (te toca reembolsar a ti) y ⚪ Revisar
+  //  - incidencia: algo que reclamar (o que ya se ha gestionado como tal)
+  function classify(r) {
+    if (['resolved', 'claim_filed', 'dismissed'].includes(r.case_status)) return 'incidencia';
+    if (r.alert_level === 'red' || r.alert_level === 'orange') return 'incidencia';
+    if (r.alert_level === 'yellow') return r.return_type === 'fbm' ? 'aviso' : 'incidencia';
+    if (r.alert_level === 'gray') return 'aviso';
+    return r.received_confirmed ? 'recibida' : 'camino';
+  }
+  const BAD_CONDITIONS = ['danado', 'diferente', 'incompleto'];
+  function incidenceType(r) {
+    if (r.return_type === 'fba_sin_devolucion' || r.return_type === 'fbm_sin_devolucion') return 'sin_devolucion';
+    if (r.return_type === 'fbm' && BAD_CONDITIONS.includes(r.received_condition)) return 'danado';
+    if (r.return_type === 'fbm' && r.refund_applied && !r.received_confirmed) return 'sin_devolucion';
+    if (r.return_type === 'fba' && ['DEFECTIVE', 'CUSTOMER_DAMAGED'].includes(r.detailed_disposition)) return 'danado';
+    if (r.safet_claim_state === 'NOGRANT') return 'safet';
+    return 'otras';
+  }
+  const TYPE_LABELS = { sin_devolucion: 'Reembolsado sin devolver', danado: 'Devuelto dañado / diferente / incompleto', safet: 'SAFE-T denegada', otras: 'Otras' };
+
   function renderRecovery() {
     const base = rows.filter(r => recChannel === 'all' || (recChannel === 'fba' ? isFba(r) : isFbm(r)));
     const closedAt = r => toDate(r.case_updated_at);
+    // Todo el informe se cuenta por fecha de solicitud de la devolución (cohorte),
+    // para que las cifras cuadren entre sí.
+    const L = base.filter(r => inPeriod(detectDate(r)));
+
+    const groups = { recibida: [], camino: [], aviso: [], incidencia: [] };
+    L.forEach(r => groups[classify(r)].push(r));
+    const inc = groups.incidencia;
+    const won = inc.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada');
+    const lost = inc.filter(r => r.case_status === 'resolved' && r.outcome === 'perdida');
+    const noOutcome = inc.filter(r => r.case_status === 'resolved' && !r.outcome);
+    const following = inc.filter(r => r.case_status === 'claim_filed');
+    const dismissed = inc.filter(r => r.case_status === 'dismissed');
+    const unclaimed = inc.filter(r => r.case_status === 'pending');
+    const claimed = won.length + lost.length + following.length + noOutcome.length;
 
     const wonAll = base.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada');
-    const won = wonAll.filter(r => inPeriod(closedAt(r)));
-    const lost = base.filter(r => r.case_status === 'resolved' && r.outcome === 'perdida' && inPeriod(closedAt(r)));
-    const following = base.filter(r => r.case_status === 'claim_filed' && inPeriod(closedAt(r)));
     const recovered = won.reduce((s, r) => s + (Number(r.recovered_amount) || 0), 0);
     const wonNoAmount = won.filter(r => r.recovered_amount == null).length;
     const lostAmt = lost.reduce((s, r) => s + (Number(r.amount_at_risk) || 0), 0);
     const followAmt = following.reduce((s, r) => s + (Number(r.amount_at_risk) || 0), 0);
     const resolvedN = won.length + lost.length;
     const rate = resolvedN ? won.length / resolvedN : 0;
+    const pct = (a, b) => b ? Math.round(a / b * 100) + '%' : '—';
 
     // ---- héroe ----
-    const pLabel = { month: 'este mes', '3m': 'en los últimos 3 meses', year: 'este año', all: 'desde el principio' }[recPeriod];
+    const pLabel = { month: 'de las devoluciones de este mes', '3m': 'de las devoluciones de los últimos 3 meses', year: 'de las devoluciones de este año', all: 'desde el principio' }[recPeriod];
     document.getElementById('rec-hero-lbl').textContent = 'Dinero recuperado ' + pLabel;
     animateAmount(document.getElementById('rec-hero-amt'), recovered);
-    document.getElementById('rec-hero-txt').innerHTML = resolvedN
-      ? `<b>${won.length} casos ganados</b> de ${resolvedN} resueltos · tasa de éxito <b>${Math.round(rate * 100)}%</b>${following.length ? ` · <b>${fmtEUR0(followAmt)}</b> más en camino (${following.length} en seguimiento)` : ''}.`
-      : 'Todavía no hay casos cerrados en este periodo. Cuando finalices un caso como Ganada con su importe, aparecerá aquí.';
+    document.getElementById('rec-hero-txt').innerHTML = L.length
+      ? `De <b>${L.length} devoluciones</b>, <b>${groups.recibida.length}</b> volvieron bien y <b>${inc.length}</b> tuvieron incidencia. ` +
+        (resolvedN ? `De las reclamadas: <b>${won.length} ganadas</b> y ${lost.length} perdidas (éxito <b>${pct(won.length, resolvedN)}</b>).` : 'Todavía no hay reclamaciones cerradas.') +
+        (following.length ? ` <b>${fmtEUR0(followAmt)}</b> más en camino (${following.length} en seguimiento).` : '')
+      : 'No hay devoluciones en este periodo.';
     const warn = document.getElementById('rec-hero-warn');
     warn.hidden = !wonNoAmount;
     warn.textContent = wonNoAmount ? `⚠ ${wonNoAmount} caso(s) ganado(s) sin importe registrado no suman aquí. En Control, filtra “Solo Finalizado” y vuelve a pulsar ✓ Finalizado para añadirlo.` : '';
@@ -1173,11 +1316,10 @@
     document.getElementById('rec-lvl-name').textContent = 'Nivel ' + cur[0];
     document.getElementById('rec-medal').style.background = `radial-gradient(circle at 35% 30%, #fff, ${cur[2]} 60%)`;
     document.getElementById('rec-lvl-total').textContent = fmtEUR0(lifetime) + ' en total';
-    const pct = nxt ? (lifetime - cur[1]) / (nxt[1] - cur[1]) * 100 : 100;
-    document.getElementById('rec-lvl-bar').style.width = Math.max(0, Math.min(100, pct)) + '%';
+    const lvPct = nxt ? (lifetime - cur[1]) / (nxt[1] - cur[1]) * 100 : 100;
+    document.getElementById('rec-lvl-bar').style.width = Math.max(0, Math.min(100, lvPct)) + '%';
     document.getElementById('rec-lvl-next').textContent = nxt ? `Te faltan ${fmtEUR0(nxt[1] - lifetime)} para llegar a ${nxt[0]}` : 'Nivel máximo alcanzado';
 
-    // racha: semanas seguidas con algún caso gestionado
     const weeks = new Set(base.filter(r => r.case_status !== 'pending' && closedAt(r)).map(r => weekIndex(closedAt(r))));
     let w = weekIndex(new Date()); if (!weeks.has(w)) w -= 1;
     let streak = 0; while (weeks.has(w)) { streak++; w--; }
@@ -1197,7 +1339,7 @@
     document.getElementById('rec-badges').innerHTML = B.map(([t, ok]) => `<span class="rbadge ${ok ? 'got' : ''}">${ok ? '🏅' : '🔒'} ${t}</span>`).join('');
 
     // ---- dinero sin reclamar (estado actual, sin filtro de periodo) ----
-    const open = base.filter(r => r.case_status === 'pending' && ['red', 'orange', 'yellow'].includes(r.alert_level));
+    const open = base.filter(r => r.case_status === 'pending' && classify(r) === 'incidencia');
     const openAmt = open.reduce((s, r) => s + (Number(r.amount_at_risk) || 0), 0);
     const cta = document.getElementById('rec-cta');
     cta.classList.toggle('ok', open.length === 0);
@@ -1205,28 +1347,55 @@
     document.getElementById('rec-cta-n').textContent = open.length;
     document.getElementById('rec-cta-urg').textContent = pendingUrgent.length
       ? `${pendingUrgent.length} son urgentes (rojo): reclámalos antes de que venza el plazo.`
-      : (open.length ? 'Ninguno urgente ahora mismo.' : '¡Todo reclamado! No hay casos pendientes con incidencia.');
+      : (open.length ? 'Ninguno urgente ahora mismo.' : '¡Todo reclamado! No hay incidencias pendientes.');
     document.getElementById('rec-cta-btn').hidden = open.length === 0;
 
     // ---- KPIs ----
-    const detected = base.filter(r => (r.alert_level !== 'none' || r.case_status !== 'pending') && inPeriod(detectDate(r)));
-    const claimed = detected.filter(r => r.case_status === 'claim_filed' || r.case_status === 'resolved');
     const K = [
-      ['Casos detectados', detected.length, 'con incidencia en el periodo', ''],
-      ['Reclamados', claimed.length, detected.length ? Math.round(claimed.length / detected.length * 100) + '% de lo detectado' : '—', ''],
-      ['Ganados', won.length, fmtEUR0(recovered) + ' recuperados', 'g'],
-      ['Perdidos', lost.length, fmtEUR0(lostAmt) + ' sin recuperar', 'r'],
-      ['Tasa de éxito', resolvedN ? Math.round(rate * 100) + '%' : '—', 'ganados / resueltos', rate >= 0.6 ? 'g' : 'a'],
+      ['Devoluciones', L.length, 'solicitadas en el periodo', ''],
+      ['Recibidas bien', groups.recibida.length, pct(groups.recibida.length, L.length) + ' · stock recuperado', 'g'],
+      ['Con incidencia', inc.length, pct(inc.length, L.length) + ' de las devoluciones', 'r'],
+      ['Reclamadas', claimed, pct(claimed, inc.length) + ' de las incidencias', ''],
+      ['Tasa de éxito', resolvedN ? pct(won.length, resolvedN) : '—', `${won.length} ganadas · ${lost.length} perdidas`, rate >= 0.6 ? 'g' : 'a'],
       ['Recuperación media', won.length - wonNoAmount > 0 ? fmtEUR(recovered / (won.length - wonNoAmount)) : '—', 'por caso ganado', '']
     ];
     document.getElementById('rec-kpis').innerHTML = K.map(([k, v, d, c]) =>
       `<div class="kpi"><div class="label">${k}</div><div class="value ${c}">${v}</div><div class="sub">${d}</div></div>`).join('');
 
-    // ---- gráfico mensual ----
+    // ---- árbol ----
+    const T = L.length || 1;
+    const node = (lvl, label, n, cls, extra) =>
+      `<div class="tnode lvl${lvl} ${cls}"><span class="tl">${label}</span><div class="tb"><span style="width:${n ? Math.max(1.5, n / T * 100) : 0}%"></span></div><span class="tn">${n}</span><span class="tx">${extra || ''}</span></div>`;
+    document.getElementById('rec-tree').innerHTML = [
+      node(0, 'Devoluciones', L.length, 'c-all'),
+      node(1, 'Recibidas correctamente', groups.recibida.length, 'c-ok', 'stock recuperado'),
+      groups.camino.length ? node(1, 'Aún sin llegar', groups.camino.length, 'c-mute', 'sin alerta todavía') : '',
+      groups.aviso.length ? node(1, 'Avisos / revisar a mano', groups.aviso.length, 'c-mute', 'reembolso FBM pendiente o ⚪ Revisar') : '',
+      node(1, 'Con incidencia', inc.length, 'c-inc'),
+      node(2, 'Reclamadas', claimed, 'c-claim'),
+      node(3, 'Ganadas', won.length, 'c-won', recovered ? '+' + fmtEUR0(recovered) : ''),
+      node(3, 'Perdidas', lost.length, 'c-lost', lostAmt ? fmtEUR0(lostAmt) : ''),
+      following.length ? node(3, 'En seguimiento', following.length, 'c-claim', fmtEUR0(followAmt)) : '',
+      noOutcome.length ? node(3, 'Finalizadas sin resultado', noOutcome.length, 'c-mute', 'antiguas, sin Ganada/Perdida') : '',
+      node(2, 'Sin reclamar todavía', unclaimed.length, 'c-pend'),
+      dismissed.length ? node(2, 'Descartadas', dismissed.length, 'c-mute', 'no era pérdida') : ''
+    ].join('');
+
+    const typeCounts = {};
+    inc.forEach(r => { const t = incidenceType(r); typeCounts[t] = (typeCounts[t] || 0) + 1; });
+    const typeRows = Object.keys(TYPE_LABELS).filter(k => typeCounts[k]).map(k => {
+      const ofType = inc.filter(r => incidenceType(r) === k);
+      const tw = ofType.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada').length;
+      const tl = ofType.filter(r => r.case_status === 'resolved' && r.outcome === 'perdida').length;
+      return `<div class="trow"><span>${TYPE_LABELS[k]}</span><b class="num">${typeCounts[k]}</b><span class="small">${tw + tl ? `${tw} ganadas · ${tl} perdidas` : 'sin cerrar'}</span></div>`;
+    });
+    document.getElementById('rec-types').innerHTML = typeRows.length ? typeRows.join('') : '<div class="small">Sin incidencias en este periodo.</div>';
+
+    // ---- gráfico mensual (por mes de solicitud) ----
     const now = new Date();
     let start = periodStart();
     if (!start) {
-      const first = wonAll.map(closedAt).filter(Boolean).sort((a, b) => a - b)[0] || now;
+      const first = wonAll.map(detectDate).filter(Boolean).sort((a, b) => a - b)[0] || now;
       start = new Date(first.getFullYear(), first.getMonth(), 1);
       const min = new Date(now.getFullYear(), now.getMonth() - 23, 1);
       if (start < min) start = min;
@@ -1236,7 +1405,7 @@
       buckets.push({ y: d.getFullYear(), m: d.getMonth(), v: 0 });
     }
     won.forEach(r => {
-      const d = closedAt(r); if (!d) return;
+      const d = detectDate(r); if (!d) return;
       const b = buckets.find(x => x.y === d.getFullYear() && x.m === d.getMonth());
       if (b) b.v += Number(r.recovered_amount) || 0;
     });
@@ -1264,18 +1433,9 @@
       }
     });
 
-    // ---- embudo ----
-    const dWon = detected.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada').length;
-    const dLost = detected.filter(r => r.case_status === 'resolved' && r.outcome === 'perdida').length;
-    const F = [['Detectados', detected.length, ''], ['Reclamados', claimed.length, 'claim'], ['Ganados', dWon, 'won'], ['Perdidos', dLost, 'lost']];
-    const mx = Math.max(1, detected.length);
-    document.getElementById('rec-funnel').innerHTML = F.map(([t, n, c]) =>
-      `<div class="fstep ${c}"><span class="t">${t}</span><div class="fb" style="width:${Math.max(2, n / mx * 100)}%"></div><span class="n">${n}</span></div>`).join('');
-
     // ---- motivos de pérdida ----
     const reasonKeys = ['dano_cliente', 'fuera_plazo', 'safet_denegada', 'idr_denegada', 'faltan_pruebas', 'sin_perdida', 'otro', '__none'];
-    const counts = reasonKeys.map(k => lost.filter(r => (r.loss_reason || '__none') === k).length);
-    const used = reasonKeys.map((k, i) => ({ k, n: counts[i] })).filter(x => x.n > 0);
+    const used = reasonKeys.map(k => ({ k, n: lost.filter(r => (r.loss_reason || '__none') === k).length })).filter(x => x.n > 0);
     const palette = { dano_cliente: '#d92d2d', fuera_plazo: '#fca61b', safet_denegada: '#06182e', idr_denegada: '#3d5f8f', faltan_pruebas: '#8a6fd1', sin_perdida: '#2fae6a', otro: '#9aa6b8', __none: '#d5dbe5' };
     document.getElementById('rec-loss-empty').hidden = used.length > 0;
     if (chartLoss) chartLoss.destroy();
@@ -1302,7 +1462,7 @@
     // ---- últimas victorias ----
     const feed = won.slice().sort((a, b) => (closedAt(b) || 0) - (closedAt(a) || 0)).slice(0, 8);
     document.getElementById('rec-feed').innerHTML = feed.length
-      ? feed.map(r => `<div class="feed-row"><span class="dot"></span><span><b>${r.handled_by || '—'}</b> recuperó <b class="g">${r.recovered_amount != null ? fmtEUR(r.recovered_amount) : 'importe sin indicar'}</b> · ${channelLabel(r.return_type)} <span class="o">${r.order_id}</span></span><span class="small">${closedAt(r) ? closedAt(r).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }) : ''}</span></div>`).join('')
+      ? feed.map(r => `<div class="feed-row"><span class="dot"></span><span><b>${r.handled_by || '—'}</b> recuperó <b class="g">${r.recovered_amount != null ? fmtEUR(r.recovered_amount) : 'importe sin indicar'}</b> · ${channelLabel(r.return_type)} · ${TYPE_LABELS[incidenceType(r)]} <span class="o">${r.order_id}</span></span><span class="small">${closedAt(r) ? closedAt(r).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' }) : ''}</span></div>`).join('')
       : '<div class="small">Sin casos ganados en este periodo.</div>';
   }
 
@@ -1344,4 +1504,3 @@
 
 </body>
 </html>
-
