@@ -748,9 +748,9 @@
     const risk = openRisk.reduce((sum, r) => sum + (Number(r.amount_at_risk) || 0), 0);
     const withIssue = scope.filter(r => r.alert_level !== 'none' && isOpen(r));
     const closed = scope.filter(r => r.case_status === 'resolved' || r.case_status === 'dismissed');
-    const won = scope.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada');
+    const won = scope.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada' && classify(r) === 'incidencia');
     const wonAmt = won.reduce((s, r) => s + (Number(r.recovered_amount) || 0), 0);
-    const received = scope.filter(r => r.alert_level === 'none' && r.received_confirmed);
+    const received = scope.filter(r => classify(r) === 'recibida');
 
     document.getElementById('kpi-risk').textContent = fmtEUR(risk);
     document.getElementById('kpi-count').textContent = withIssue.length;
@@ -1265,16 +1265,21 @@
     return Math.floor((Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()) - ref) / (7 * 864e5));
   }
 
-  // Clasificación de cada devolución para el informe
-  //  - recibida: volvió y no hay nada que reclamar
+  // Clasificación de cada devolución para el informe. Se decide por LO QUE LE PASÓ
+  // a la devolución, no por el botón que se pulsó:
+  //  - incidencia: alerta abierta ahora, un tipo real de incidencia (sin devolver,
+  //    dañada/diferente/incompleta, SAFE-T denegada), importe recuperado apuntado,
+  //    o en Seguimiento
+  //  - aviso:    FBM "te toca reembolsar" y ⚪ Revisar
+  //  - recibida: volvió bien (aunque se marcara como Ganada con la lógica antigua)
   //  - camino:   todavía no ha llegado y no hay alerta
-  //  - aviso:    FBM "reembolso pendiente" (te toca reembolsar a ti) y ⚪ Revisar
-  //  - incidencia: algo que reclamar (o que ya se ha gestionado como tal)
   function classify(r) {
-    if (['resolved', 'claim_filed', 'dismissed'].includes(r.case_status)) return 'incidencia';
     if (r.alert_level === 'red' || r.alert_level === 'orange') return 'incidencia';
     if (r.alert_level === 'yellow') return r.return_type === 'fbm' ? 'aviso' : 'incidencia';
     if (r.alert_level === 'gray') return 'aviso';
+    if (incidenceType(r) !== 'otras') return 'incidencia';
+    if (r.case_status === 'claim_filed') return 'incidencia';
+    if (r.case_status === 'resolved' && r.recovered_amount != null) return 'incidencia';
     return r.received_confirmed ? 'recibida' : 'camino';
   }
   const BAD_CONDITIONS = ['danado', 'diferente', 'incompleto'];
@@ -1306,7 +1311,7 @@
     const unclaimed = inc.filter(r => r.case_status === 'pending');
     const claimed = won.length + lost.length + following.length + noOutcome.length;
 
-    const wonAll = base.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada');
+    const wonAll = base.filter(r => r.case_status === 'resolved' && r.outcome === 'ganada' && classify(r) === 'incidencia');
     const recovered = won.reduce((s, r) => s + (Number(r.recovered_amount) || 0), 0);
     const wonNoAmount = won.filter(r => r.recovered_amount == null).length;
     const lostAmt = lost.reduce((s, r) => s + (Number(r.amount_at_risk) || 0), 0);
