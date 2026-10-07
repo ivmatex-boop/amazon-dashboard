@@ -193,6 +193,8 @@
   .case-tag.resolved.perdida { color: var(--red); }
   .case-tag.dismissed { color: var(--gray); }
   .case-tag.claim_filed { color: var(--brand-ink); }
+  .case-tag.received-ok { color: var(--green); }
+  .case-tag.to-refund { color: var(--yellow); font-weight: 700; }
   .won-amt { font-size: 12px; font-weight: 700; color: var(--green); margin-top: 2px; }
 
   .amount { font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -449,7 +451,7 @@
     <option value="Luis">Luis</option>
   </select>
   <select id="gestion-filter">
-    <option value="active" selected>Activos (Pendiente + Seguimiento)</option>
+    <option value="active" selected>Activos (necesitan acción)</option>
     <option value="pending">Solo Pendiente</option>
     <option value="claim_filed">Solo Seguimiento</option>
     <option value="resolved">Solo Finalizado</option>
@@ -822,7 +824,9 @@
 
     // Gestión (Pendiente/Seguimiento/Finalizado/Descartado)
     if (gestionFilter === 'active') {
-      filtered = filtered.filter(r => r.case_status === 'pending' || r.case_status === 'claim_filed');
+      // Activos = lo que pide una acción: en Seguimiento, o Pendiente con alguna alerta.
+      // Las 🟢 OK pendientes (llegaron bien / sin nada que hacer) no salen aquí; se ven con "Todos".
+      filtered = filtered.filter(r => r.case_status === 'claim_filed' || (r.case_status === 'pending' && r.alert_level !== 'none'));
     } else if (gestionFilter !== 'all') {
       filtered = filtered.filter(r => r.case_status === gestionFilter);
     }
@@ -950,7 +954,7 @@
         <td class="amount">${r.amount_at_risk != null ? fmtEUR(r.amount_at_risk) : '—'}</td>
         <td class="num">${r.days_elapsed ?? '—'}</td>
         <td>
-          <span class="case-tag ${r.case_status}${r.case_status === 'resolved' && r.outcome ? ' ' + r.outcome : ''}">${caseLabel(r.case_status, r.outcome)}</span>
+          <span class="case-tag ${gestionClass(r)}">${gestionLabel(r)}</span>
           ${r.case_status === 'resolved' && r.outcome === 'ganada' && r.recovered_amount != null ? `<div class="won-amt">+${fmtEUR(r.recovered_amount)} recuperado</div>` : ''}
           ${r.case_status === 'resolved' && r.outcome === 'perdida' && r.loss_reason ? `<div class="reason">Motivo: ${LOSS_REASONS[r.loss_reason] || r.loss_reason}</div>` : ''}
           ${r.handled_by ? `<div class="reason">por ${r.handled_by}</div>` : ''}
@@ -981,6 +985,22 @@
 
   function labelFor(level) {
     return { red: '🔴 Urgente', orange: '🟠 Últimos días', yellow: '🟡 Vigilar', gray: '⚪ Revisar', none: '🟢 OK' }[level] || level;
+  }
+
+  // Lo que se muestra en la columna Gestión. Solo cambia el texto de los casos
+  // "Pendiente" sin nada que reclamar; el estado guardado no se toca.
+  function gestionLabel(r) {
+    if (r.case_status === 'pending') {
+      if (r.alert_level === 'none' && r.received_confirmed) return '✓ Recibida, nada que gestionar';
+      if (r.alert_level === 'none') return 'En camino';
+      if (r.alert_level === 'yellow' && r.return_type === 'fbm' && r.received_confirmed && !r.refund_applied) return 'Te toca reembolsar';
+    }
+    return caseLabel(r.case_status, r.outcome);
+  }
+  function gestionClass(r) {
+    if (r.case_status === 'pending' && r.alert_level === 'none') return r.received_confirmed ? 'received-ok' : 'pending';
+    if (r.case_status === 'pending' && r.alert_level === 'yellow' && r.return_type === 'fbm' && r.received_confirmed && !r.refund_applied) return 'to-refund';
+    return r.case_status + (r.case_status === 'resolved' && r.outcome ? ' ' + r.outcome : '');
   }
 
   function caseLabel(status, outcome) {
@@ -1136,7 +1156,7 @@
       'Importe': r.amount_at_risk != null ? Number(r.amount_at_risk) : '',
       'Días': r.days_elapsed ?? '',
       'Motivo': r.alert_reason || '',
-      'Gestión': caseLabel(r.case_status, r.outcome),
+      'Gestión': gestionLabel(r),
       'Resultado': r.case_status === 'resolved' ? (r.outcome === 'ganada' ? 'Ganada' : r.outcome === 'perdida' ? 'Perdida' : '') : '',
       'Importe recuperado': r.recovered_amount != null ? Number(r.recovered_amount) : '',
       'Motivo pérdida': r.loss_reason ? (LOSS_REASONS[r.loss_reason] || r.loss_reason) : '',
